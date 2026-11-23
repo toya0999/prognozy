@@ -793,6 +793,7 @@ th{font-size:11px;text-transform:uppercase;color:var(--mut);font-weight:600}
 <label><input type="checkbox" id="val"> tylko VALUE</label>
 <label>Sortuj <select id="sort">
 <option value="p">prawdopodobieństwo</option>
+<option value="t">data i godzina meczu</option>
 <option value="kd">kurs: od najwyższego</option>
 <option value="kr">kurs: od najniższego</option>
 <option value="rd">kurs rynku: od najwyższego</option>
@@ -808,7 +809,8 @@ th{font-size:11px;text-transform:uppercase;color:var(--mut);font-weight:600}
 <button class="chip on" data-rk="">Wszystkie</button><button class="chip" data-rk="wynik">&#x1F3C6; Wynik</button>
 <button class="chip" data-rk="bramki">&#x26BD; Bramki</button><button class="chip" data-rk="rozne">&#x1F6A9; Rożne</button>
 <button class="chip" data-rk="kartki">&#x1F7E8; Kartki</button><button class="chip" data-rk="strzaly">&#x1F3AF; Strzały</button>
-<button class="chip" data-rk="zaw">&#x1F464; Zawodnicy</button></div></header>
+<button class="chip" data-rk="zaw">&#x1F464; Zawodnicy</button></div>
+<div class="chipy" id="dni"></div></header>
 <main><p class="leg">Forma = ile razy dany typ wszedł w ostatnich __N__ meczach drużyny (dla gościa z jego perspektywy). H2H = w bezpośrednich meczach z 5 sezonów. Kolory: zielony = częściej, pomarańczowy = rzadziej.</p>
 <details id="vb" open><summary>&#x1F48E; Value bety</summary>
 <div class="kform"><label><input type="checkbox" id="vpod"> uwzględnij podatek 12%</label>
@@ -917,10 +919,21 @@ const kol=q=>q>=.8?"#00b050":q>=.6?"#92d050":q>=.4?"#ffd84d":"#f4a582";
 function st(s){if(!s[1])return'<span style="color:var(--mut)">-</span>';const q=s[0]/s[1];
 return`<span class="st">${s[0]}/${s[1]}<span class="bar"><i style="width:${q*100}%;background:${kol(q)}"></i></span></span>`}
 const r=s=>s[1]?s[0]/s[1]:-1;
-const KLUCZ={p:x=>-x.p,kd:x=>-x.kurs,kr:x=>x.kurs,rd:x=>-(x.rynek||0),f:x=>-((r(x.fh)+r(x.fg))/2),h:x=>-r(x.h2h)};
+const KLUCZ={p:x=>-x.p,t:x=>x.m.ts,kd:x=>-x.kurs,kr:x=>x.kurs,rd:x=>-(x.rynek||0),f:x=>-((r(x.fh)+r(x.fg))/2),h:x=>-r(x.h2h)};
 const sortuj=a=>a.sort((x,y)=>KLUCZ[sort.value](x)-KLUCZ[sort.value](y)||y.p-x.p);
-let RK="";
-const pasujeKat=x=>(!RK||x.rk===RK)&&(!kat.value||x.kat===kat.value||(kat.value==="druz"&&(x.kat==="gosp"||x.kat==="gosc")));
+let RK="",DZIEN="";
+const pasujeKat=x=>(!DZIEN||x.m.data===DZIEN)&&(!RK||x.rk===RK)&&(!kat.value||x.kat===kat.value||(kat.value==="druz"&&(x.kat==="gosp"||x.kat==="gosc")));
+// dni: przyciski z datami meczów
+const ts=(d,g)=>{const [dd,mm,rr]=(d||"").split("/").map(Number),[hh,mi]=(g||"00:00").split(":").map(Number);return rr?new Date(rr,mm-1,dd,hh||0,mi||0).getTime():0};
+D.forEach(m=>m.ts=ts(m.data,m.godz));
+(()=>{const DNI=["Nd","Pn","Wt","Śr","Cz","Pt","So"],dz=new Date();dz.setHours(0,0,0,0);
+const daty=[...new Set(D.map(m=>m.data).filter(Boolean))].sort((a,b)=>ts(a)-ts(b));
+const ety=d=>{const t=new Date(ts(d)),r=Math.round((t-dz)/864e5),dm=d.slice(0,5).replace("/",".");
+return r===0?`Dziś ${dm}`:r===1?`Jutro ${dm}`:`${DNI[t.getDay()]} ${dm}`};
+dni.innerHTML=`<button class="chip on" data-dz="">&#x1F4C5; Wszystkie dni</button>`+daty.map(d=>{
+const n=D.filter(m=>m.data===d).length;return`<button class="chip" data-dz="${d}">${ety(d)} <span style="opacity:.7">(${n})</span></button>`}).join("");
+dni.addEventListener("click",e=>{const c=e.target.closest("[data-dz]");if(!c)return;DZIEN=c.dataset.dz;
+dni.querySelectorAll(".chip").forEach(b=>b.classList.toggle("on",b===c));rys()})})();
 chipy.addEventListener("click",e=>{const c=e.target.closest("[data-rk]");if(!c)return;RK=c.dataset.rk;
 chipy.querySelectorAll(".chip").forEach(b=>b.classList.toggle("on",b===c));rys()});
 function value(){const pod=vpod.checked?0.88:1,mn=(+vmin.value||0)/100,pm=+vpmin.value||0;
