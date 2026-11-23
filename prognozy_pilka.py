@@ -44,8 +44,9 @@ TERMINARZ_FD = {"E0": "epl", "E1": "championship", "SP1": "la-liga", "I1": "seri
                 "SC0": "scottish-premiership"}
 LIGI_DLA_PUCHAROW = ["E0", "E1", "SP1", "I1", "D1", "F1", "N1", "P1", "B1", "T1", "SC0", "G1"]
 # przybliżona siła lig (do meczów pucharowych między ligami)
-SILA = {"E0": 1.0, "SP1": 0.97, "I1": 0.95, "D1": 0.94, "F1": 0.9, "P1": 0.84, "N1": 0.84,
-        "E1": 0.8, "B1": 0.8, "T1": 0.8, "SC0": 0.74, "G1": 0.74, "ARG": 0.75, "BRA": 0.8}
+SILA = {"E0": 1.0, "SP1": 0.93, "I1": 0.92, "D1": 0.92, "F1": 0.88, "P1": 0.80, "N1": 0.80,
+        "E1": 0.74, "B1": 0.76, "T1": 0.76, "SC0": 0.68, "G1": 0.70, "ARG": 0.72, "BRA": 0.76}
+SILA_POTEGA = 2.0   # jak mocno różnica siły lig wpływa na gole w pucharach
 NAZWY = {"E0": "Premier League", "E1": "Championship", "SP1": "LaLiga", "I1": "Serie A",
          "D1": "Bundesliga", "F1": "Ligue 1", "N1": "Eredivisie", "P1": "Portugalia",
          "T1": "Turcja", "B1": "Belgia", "SC0": "Szkocja", "G1": "Grecja",
@@ -281,7 +282,7 @@ class Liga:
         obr_h = srs(sh, "gs_h", L1a) / L1a
         atk_a = srs(sa, "gs_h", L2a) / L2a   # gole strzelone przez gościa
         obr_a = srs(sa, "gz_h", L2h) / L2h   # gole stracone przez gościa
-        ratio = sila_h / sila_g
+        ratio = (sila_h / sila_g) ** SILA_POTEGA
         lam_h = atk_h * obr_a * (L1h + L2h) / 2 * ratio
         lam_a = atk_a * obr_h * (L1a + L2a) / 2 / ratio
         wynik = {"lam_h": lam_h, "lam_a": lam_a}
@@ -647,6 +648,8 @@ def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=10):
         if znajdz(g, {normalizuj(f["teams"]["away"]["name"]): 1}):
             mecz = f
     if not mecz:
+        print(f"   [zawodnicy] nie znaleziono meczu {h} - {g} w API-Football "
+              f"({len(lista)} meczów tego dnia" + ("" if lista else " - pusta odpowiedź, sprawdź błędy wyżej") + ")")
         return []
     druzyny = [(mecz["teams"]["home"], lam_h, "H"), (mecz["teams"]["away"], lam_a, "A")]
     ostatnie = {}
@@ -663,6 +666,8 @@ def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=10):
                 "players": [{"team": p["team"]["id"], "players": [
                     {"name": x["player"]["name"], "s": x["statistics"][0] if x.get("statistics") else {}}
                     for x in p.get("players", [])]} for p in f.get("players", [])]})
+    if not any(ostatnie.values()):
+        print(f"   [zawodnicy] API-Football nie zwróciło ostatnich meczów drużyn {h} / {g}")
     typy_zaw = []
     for t, lam, strona in druzyny:
         mecze = [af.cache.get(f"af|fx|{i}") for i in ostatnie.get(t["id"], [])]
@@ -800,9 +805,10 @@ th{font-size:11px;text-transform:uppercase;color:var(--mut);font-weight:600}
 <details id="vb" open><summary>&#x1F48E; Value bety</summary>
 <div class="kform"><label><input type="checkbox" id="vpod"> uwzględnij podatek 12%</label>
 <label>min. przewaga <input type="number" id="vmin" value="5" min="0" max="100" style="width:60px">%</label>
-<label>min. szansa <input type="number" id="vpmin" value="30" min="1" max="99" style="width:60px">%</label></div>
+<label>min. szansa <input type="number" id="vpmin" value="30" min="1" max="99" style="width:60px">%</label>
+<label>maks. przewaga <input type="number" id="vmax" value="40" min="5" max="1000" style="width:60px">%</label></div>
 <div class="wrap" id="vlista"></div>
-<p class="knot">Value bet = kurs u bukmachera wyższy, niż wynika ze statystyk. Przewaga = szansa &times; kurs &minus; 1. Przy podatku 12% potrzeba ok. 14% przewagi, żeby wyjść na plus. Pojedynczy value bet i tak często przegrywa: zysk pojawia się dopiero przy wielu takich zakładach.</p></details>
+<p class="knot">Value bet = kurs u bukmachera wyższy, niż wynika ze statystyk. Przewaga = szansa &times; kurs &minus; 1. Przy podatku 12% potrzeba ok. 14% przewagi, żeby wyjść na plus. Pojedynczy value bet i tak często przegrywa: zysk pojawia się dopiero przy wielu takich zakładach. Bardzo duża przewaga (np. +100%) to prawie zawsze błąd modelu, a nie okazja: bukmacher wie o składach, kontuzjach i formie więcej niż statystyka - dlatego domyślnie ukrywam przewagi powyżej 40%.</p></details>
 <details id="gen" open><summary>&#x1F3B2; Generator kuponów</summary>
 <div class="kform">
 <label>min. prawd. typu <input type="number" id="gmin" value="70" min="50" max="99">%</label>
@@ -906,13 +912,13 @@ const r=s=>s[1]?s[0]/s[1]:-1;
 const KLUCZ={p:x=>-x.p,kd:x=>-x.kurs,kr:x=>x.kurs,rd:x=>-(x.rynek||0),f:x=>-((r(x.fh)+r(x.fg))/2),h:x=>-r(x.h2h)};
 const sortuj=a=>a.sort((x,y)=>KLUCZ[sort.value](x)-KLUCZ[sort.value](y)||y.p-x.p);
 function value(){const pod=vpod.checked?0.88:1,mn=(+vmin.value||0)/100,pm=+vpmin.value||0;
-const t=D.flatMap(m=>m.typy).filter(x=>x.rynek&&x.p>=pm).map(x=>({x,ev:x.p/100*x.rynek*pod-1})).filter(z=>z.ev>=mn).sort((a,b)=>b.ev-a.ev);
+const t=D.flatMap(m=>m.typy).filter(x=>x.rynek&&x.p>=pm).map(x=>({x,ev:x.p/100*x.rynek*pod-1})).filter(z=>z.ev>=mn&&z.ev<=(+vmax.value||40)/100).sort((a,b)=>b.ev-a.ev);
 vlista.innerHTML=t.length?`<table><tr><th></th><th>Mecz</th><th>Typ</th><th>Szansa</th><th>Uczciwy kurs</th><th>Kurs</th><th>Przewaga</th></tr>
 ${t.map(({x,ev})=>`<tr><td><button class="dod${K.has(x.id)?" on":""}" data-id="${x.id}">${K.has(x.id)?"&#10003;":"+"}</button></td>
 <td><b>${x.m.h} &ndash; ${x.m.g}</b><br><span class="mm">${x.m.liga} &middot; ${x.m.data} ${x.m.godz}</span></td><td>${x.typ}</td>
 <td><span class="p ${kl(x.p)}">${x.p}%</span></td><td>${x.kurs.toFixed(2)}</td><td><b>${x.rynek.toFixed(2)}</b>${x.buk?`<br><span class="mm">${x.buk}</span>`:""}</td>
 <td class="plus">+${(ev*100).toFixed(1)}%</td></tr>`).join("")}</table>`:'<p class="knot">Brak value betów przy tych ustawieniach. Kursy bukmacherów są tylko dla 1X2 i goli (więcej rynków z kluczem The Odds API).</p>'}
-for(const e of [vpod,vmin,vpmin])e.addEventListener("input",value);
+for(const e of [vpod,vmin,vpmin,vmax])e.addEventListener("input",value);
 function rys(){value();const mn=+min.value,mf=+minf.value/100,v=val.checked,q=szukaj.value.toLowerCase();
 minv.textContent=mn;minfv.textContent=minf.value;let html="";
 const pasujeKat=x=>!kat.value||x.kat===kat.value||(kat.value==="druz"&&(x.kat==="gosp"||x.kat==="gosc"));
@@ -1282,11 +1288,13 @@ def uruchom(a, otworz=True):
         kod = w["Div"]
         h_pokaz, g_pokaz = w["HomeTeam"].strip(), w["AwayTeam"].strip()
         if kod in PUCHARY:
-            zh, zg = indeks.get(znajdz(h_pokaz, indeks)), indeks.get(znajdz(g_pokaz, indeks))
+            pop = lambda n: "Paris SG" if normalizuj(n) == "paris" else n
+            zh, zg = indeks.get(znajdz(pop(h_pokaz), indeks)), indeks.get(znajdz(pop(g_pokaz), indeks))
             if not zh or not zg:
                 brak = h_pokaz if not zh else g_pokaz
                 print(f"\n{NAZWY[kod]} {h_pokaz} - {g_pokaz}: brak danych o {brak} (liga spoza bazy)")
                 continue
+            print(f"   [puchar] {h_pokaz} -> {zh[1]} ({zh[0]}), {g_pokaz} -> {zg[1]} ({zg[0]})")
             (kod_h, h), (kod_g, g) = zh, zg
             liga_h, liga_g = modele[kod_h], modele[kod_g]
             pr = liga_h.prognoza(h, g, liga_g, SILA.get(kod_h, 0.7), SILA.get(kod_g, 0.7))
