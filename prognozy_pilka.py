@@ -652,33 +652,60 @@ def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=10):
               f"({len(lista)} meczów tego dnia" + ("" if lista else " - pusta odpowiedź, sprawdź błędy wyżej") + ")")
         return []
     druzyny = [(mecz["teams"]["home"], lam_h, "H"), (mecz["teams"]["away"], lam_a, "A")]
-    ostatnie = {}
+    ostatnie, info = {}, {}
     for t, _, _ in druzyny:
         r = af.get(f"/fixtures?team={t['id']}&last={ile}", ttl_h=20) or []
         ostatnie[t["id"]] = [f["fixture"]["id"] for f in r]
-    potrzebne = [i for ids in ostatnie.values() for i in ids if af.cache.get(f"af|fx|{i}") is None]
+        for f in r:
+            info[f["fixture"]["id"]] = {"gole": f.get("goals"), "teams": f.get("teams")}
+
+    def zapisz_fx(fid, gracze_bloki):
+        dane = info.get(fid, {})
+        af.cache.set(f"af|fx|{fid}", {
+            "gole": dane.get("gole"), "teams": dane.get("teams"),
+            "players": [{"team": p["team"]["id"], "players": [
+                {"name": x["player"]["name"], "s": x["statistics"][0] if x.get("statistics") else {}}
+                for x in p.get("players", [])]} for p in gracze_bloki]})
+
+    def ma_dane(fid):
+        c = af.cache.get(f"af|fx|{fid}")
+        return bool(c and c.get("players"))
+
+    # 1) zbiorczo: do 20 meczów w jednym zapytaniu
+    potrzebne = [i for ids in ostatnie.values() for i in ids if not ma_dane(i)]
     for n in range(0, len(potrzebne), 20):
         paczka = potrzebne[n:n + 20]
-        r = af.get("/fixtures?ids=" + "-".join(map(str, paczka)), zapisz=False)
-        for f in r or []:
-            af.cache.set(f"af|fx|{f['fixture']['id']}", {
-                "gole": f.get("goals"), "teams": f.get("teams"),
-                "players": [{"team": p["team"]["id"], "players": [
-                    {"name": x["player"]["name"], "s": x["statistics"][0] if x.get("statistics") else {}}
-                    for x in p.get("players", [])]} for p in f.get("players", [])]})
+        for f in af.get("/fixtures?ids=" + "-".join(map(str, paczka)), zapisz=False) or []:
+            fid = f["fixture"]["id"]
+            info.setdefault(fid, {"gole": f.get("goals"), "teams": f.get("teams")})
+            if f.get("players"):
+                zapisz_fx(fid, f["players"])
+    # 2) zapas: gdy plan nie zwraca zawodników zbiorczo -> osobno, 5 ostatnich meczów każdej drużyny
+    for t, _, _ in druzyny:
+        for fid in ostatnie.get(t["id"], [])[:5]:
+            if ma_dane(fid) or af.wyczerpane:
+                continue
+            r = af.get(f"/fixtures/players?fixture={fid}", zapisz=False)
+            if r:
+                zapisz_fx(fid, r)
+    for t, _, _ in druzyny:
+        n_ok = sum(1 for i in ostatnie.get(t["id"], []) if ma_dane(i))
+        print(f"   [zawodnicy] {t['name']}: mecze ze statystykami zawodników {n_ok}/{len(ostatnie.get(t['id'], []))}")
     if not any(ostatnie.values()):
         print(f"   [zawodnicy] API-Football nie zwróciło ostatnich meczów drużyn {h} / {g}")
     typy_zaw = []
     for t, lam, strona in druzyny:
         mecze = [af.cache.get(f"af|fx|{i}") for i in ostatnie.get(t["id"], [])]
         mecze = [m for m in mecze if m and m.get("players")]       # od najnowszego
-        if len(mecze) < 4:
+        if len(mecze) < 3:
             continue
         gole_druz = []
         for m in mecze:
+            if not m.get("teams") or not m.get("gole"):
+                continue
             dom = m["teams"]["home"]["id"] == t["id"]
-            gole_druz.append((m["gole"] or {}).get("home" if dom else "away") or 0)
-        sr_gole = max(0.5, sum(gole_druz) / len(gole_druz))
+            gole_druz.append(m["gole"].get("home" if dom else "away") or 0)
+        sr_gole = max(0.5, sum(gole_druz) / len(gole_druz)) if gole_druz else max(0.5, lam)
         f_atak = min(1.6, max(0.6, lam / sr_gole))
         gracze = {}
         for m in mecze:
@@ -698,7 +725,7 @@ def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=10):
                         "sot": sh.get("on") or 0, "sh": sh.get("total") or 0,
                         "kar": (c.get("yellow") or 0) + (c.get("red") or 0)})
         for imie, wyst in gracze.items():
-            if len(wyst) < 4 or sum(1 for w in wyst[:5] if w["min"] >= 45) < 3:
+            if len(wyst) < 3 or sum(1 for w in wyst[:5] if w["min"] >= 45) < 3:
                 continue                       # tylko regularnie grający
             mins = sum(w["min"] for w in wyst)
             oczek_min = min(90, sum(w["min"] for w in wyst[:5]) / len(wyst[:5]))
@@ -735,6 +762,7 @@ def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=10):
                         "h2h": [0, 0], "seria": seria,
                         "ost": "".join("✓" if x else "✗" for x in traf[:5])})
     typy_zaw.sort(key=lambda x: (-x["seria"], -x["p"]))
+    print(f"   [zawodnicy] {h} - {g}: typów na zawodników {len(typy_zaw)}")
     return typy_zaw[:12]
 
 
