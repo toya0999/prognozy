@@ -728,7 +728,7 @@ def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=10):
                 if p >= p_min or seria >= seria_min:
                     p = min(p, 0.97)
                     typy_zaw.append({
-                        "kat": "zaw", "typ": f"{imie} ({t['name']}): {nazwa}", "p": round(p * 100, 1),
+                        "kat": "zaw", "rk": "zaw", "typ": f"{imie} ({t['name']}): {nazwa}", "p": round(p * 100, 1),
                         "kurs": round(1 / p, 2), "rynek": None, "value": False,
                         "fh": [sum(traf), len(traf)] if strona == "H" else [0, 0],
                         "fg": [sum(traf), len(traf)] if strona == "A" else [0, 0],
@@ -762,6 +762,9 @@ th{font-size:11px;text-transform:uppercase;color:var(--mut);font-weight:600}
 .st{display:inline-flex;align-items:center;gap:6px}.bar{width:46px;height:6px;border-radius:3px;background:var(--lin);overflow:hidden}
 .bar i{display:block;height:100%}.val{background:#ffd700;color:#000;font-weight:700;padding:1px 6px;border-radius:6px;font-size:11px}
 .leg{font-size:12px;color:var(--mut);margin:0 0 12px}.ukryj{display:none}
+.chipy{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chip{padding:6px 14px;border-radius:999px;border:1px solid var(--lin);background:var(--bg);color:var(--txt);font-weight:600;font-size:13px;cursor:pointer}
+.chip.on{background:#305496;border-color:#305496;color:#fff}
 .dod{width:28px;height:28px;border-radius:8px;border:1px solid var(--lin);background:var(--bg);color:var(--txt);font-weight:700;cursor:pointer}
 .dod.on{background:#305496;color:#fff;border-color:#305496}
 #kbtn{position:fixed;right:16px;bottom:16px;z-index:20;padding:12px 18px;border:0;border-radius:999px;background:#305496;color:#fff;font-weight:700;box-shadow:0 4px 14px rgba(0,0,0,.25);cursor:pointer}
@@ -800,7 +803,12 @@ th{font-size:11px;text-transform:uppercase;color:var(--mut);font-weight:600}
 <label><input type="checkbox" id="razem"> wszystkie typy w jednej liście</label>
 <input type="search" id="szukaj" placeholder="Szukaj drużyny lub ligi">
 <button id="odsw" style="display:none;padding:6px 12px;border:0;border-radius:8px;background:#305496;color:#fff;font-weight:600;cursor:pointer">&#x21bb; Odśwież dane</button>
-</div></header>
+</div>
+<div class="chipy" id="chipy">
+<button class="chip on" data-rk="">Wszystkie</button><button class="chip" data-rk="wynik">&#x1F3C6; Wynik</button>
+<button class="chip" data-rk="bramki">&#x26BD; Bramki</button><button class="chip" data-rk="rozne">&#x1F6A9; Rożne</button>
+<button class="chip" data-rk="kartki">&#x1F7E8; Kartki</button><button class="chip" data-rk="strzaly">&#x1F3AF; Strzały</button>
+<button class="chip" data-rk="zaw">&#x1F464; Zawodnicy</button></div></header>
 <main><p class="leg">Forma = ile razy dany typ wszedł w ostatnich __N__ meczach drużyny (dla gościa z jego perspektywy). H2H = w bezpośrednich meczach z 5 sezonów. Kolory: zielony = częściej, pomarańczowy = rzadziej.</p>
 <details id="vb" open><summary>&#x1F48E; Value bety</summary>
 <div class="kform"><label><input type="checkbox" id="vpod"> uwzględnij podatek 12%</label>
@@ -911,8 +919,12 @@ return`<span class="st">${s[0]}/${s[1]}<span class="bar"><i style="width:${q*100
 const r=s=>s[1]?s[0]/s[1]:-1;
 const KLUCZ={p:x=>-x.p,kd:x=>-x.kurs,kr:x=>x.kurs,rd:x=>-(x.rynek||0),f:x=>-((r(x.fh)+r(x.fg))/2),h:x=>-r(x.h2h)};
 const sortuj=a=>a.sort((x,y)=>KLUCZ[sort.value](x)-KLUCZ[sort.value](y)||y.p-x.p);
+let RK="";
+const pasujeKat=x=>(!RK||x.rk===RK)&&(!kat.value||x.kat===kat.value||(kat.value==="druz"&&(x.kat==="gosp"||x.kat==="gosc")));
+chipy.addEventListener("click",e=>{const c=e.target.closest("[data-rk]");if(!c)return;RK=c.dataset.rk;
+chipy.querySelectorAll(".chip").forEach(b=>b.classList.toggle("on",b===c));rys()});
 function value(){const pod=vpod.checked?0.88:1,mn=(+vmin.value||0)/100,pm=+vpmin.value||0;
-const t=D.flatMap(m=>m.typy).filter(x=>x.rynek&&x.p>=pm).map(x=>({x,ev:x.p/100*x.rynek*pod-1})).filter(z=>z.ev>=mn&&z.ev<=(+vmax.value||40)/100).sort((a,b)=>b.ev-a.ev);
+const t=D.flatMap(m=>m.typy).filter(x=>x.rynek&&x.p>=pm&&pasujeKat(x)).map(x=>({x,ev:x.p/100*x.rynek*pod-1})).filter(z=>z.ev>=mn&&z.ev<=(+vmax.value||40)/100).sort((a,b)=>b.ev-a.ev);
 vlista.innerHTML=t.length?`<table><tr><th></th><th>Mecz</th><th>Typ</th><th>Szansa</th><th>Uczciwy kurs</th><th>Kurs</th><th>Przewaga</th></tr>
 ${t.map(({x,ev})=>`<tr><td><button class="dod${K.has(x.id)?" on":""}" data-id="${x.id}">${K.has(x.id)?"&#10003;":"+"}</button></td>
 <td><b>${x.m.h} &ndash; ${x.m.g}</b><br><span class="mm">${x.m.liga} &middot; ${x.m.data} ${x.m.godz}</span></td><td>${x.typ}</td>
@@ -921,7 +933,6 @@ ${t.map(({x,ev})=>`<tr><td><button class="dod${K.has(x.id)?" on":""}" data-id="$
 for(const e of [vpod,vmin,vpmin,vmax])e.addEventListener("input",value);
 function rys(){value();const mn=+min.value,mf=+minf.value/100,v=val.checked,q=szukaj.value.toLowerCase();
 minv.textContent=mn;minfv.textContent=minf.value;let html="";
-const pasujeKat=x=>!kat.value||x.kat===kat.value||(kat.value==="druz"&&(x.kat==="gosp"||x.kat==="gosc"));
 const ok=x=>pasujeKat(x)&&x.p>=mn&&(!v||x.value)&&(!mf||[x.fh,x.fg].every(s=>s[1]&&s[0]/s[1]>=mf));
 const pasuje=m=>!q||(m.h+" "+m.g+" "+m.liga).toLowerCase().includes(q);
 if(razem.checked){const t=sortuj(D.filter(pasuje).flatMap(m=>m.typy.filter(ok)));
@@ -1359,7 +1370,10 @@ def uruchom(a, otworz=True):
                                 nazwa, f"{proc:.1f}".replace(".", ","), f"{1/p:.2f}".replace(".", ","),
                                 f"{kurs_rynku:.2f}".replace(".", ",") if kurs_rynku else "",
                                 "TAK" if jest_value else "", txt(sh), txt(sg), txt(s2)])
-            mecz_html["typy"].append({"kat": kat, "typ": nazwa, "p": round(proc, 1), "kurs": round(1 / p, 2),
+            co = spec[1] if spec[0] == "dr" else spec[0]
+            rk = {"res": "wynik", "btts": "bramki", "gole": "bramki", "rozne": "rozne", "kartki": "kartki",
+                  "strzaly": "strzaly", "celne": "strzaly"}.get(co, "inne")
+            mecz_html["typy"].append({"kat": kat, "rk": rk, "typ": nazwa, "p": round(proc, 1), "kurs": round(1 / p, 2),
                                       "rynek": kurs_rynku, "buk": buk, "value": jest_value,
                                       "fh": list(sh), "fg": list(sg), "h2h": list(s2)})
         if af and ile_zaw < a.zaw_max and not af.wyczerpane:
