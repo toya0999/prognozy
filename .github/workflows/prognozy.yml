@@ -1,0 +1,46 @@
+name: Prognozy
+
+on:
+  schedule:
+    - cron: "17 */3 * * *"   # co 3 godziny
+  workflow_dispatch:          # przycisk "Run workflow" = ręczne odświeżenie
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Europe/Warsaw
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Generuj strone
+        run: |
+          mkdir -p strona
+          python prognozy_pilka.py --dni 3 --max-proc 85 --nie-otwieraj \
+            --html strona/index.html \
+            --odswiez-url "https://github.com/${{ github.repository }}/actions/workflows/prognozy.yml"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: strona
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
