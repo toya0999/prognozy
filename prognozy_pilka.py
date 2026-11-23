@@ -184,7 +184,10 @@ ALIASY = {
     "union saint gilloise": "st gilloise", "union sg": "st gilloise", "fenerbahce": "fenerbahce",
     "olympiakos": "olympiakos", "olympiacos": "olympiakos", "paok": "paok", "celta vigo": "celta",
     "gladbach": "m gladbach", "borussia monchengladbach": "m gladbach", "mainz 05": "mainz",
-    "az": "az alkmaar", "twente": "twente", "utrecht": "utrecht", "genk": "genk",
+    "az": "az alkmaar", "istanbul basaksehir": "buyuksehyr", "basaksehir": "buyuksehyr",
+    "fatih karagumruk": "karagumruk", "kasimpasa": "kasimpasa", "caykur rizespor": "rizespor",
+    "gaziantep": "gaziantep", "goztepe": "goztepe", "corum": "corum", "eyupspor": "eyupspor",
+    "samsunspor": "samsunspor", "kocaelispor": "kocaelispor", "genclerbirligi": "genclerbirligi", "twente": "twente", "utrecht": "utrecht", "genk": "genk",
 }
 _SMIECI = {"fc", "cf", "ac", "as", "sc", "sl", "ssc", "ss", "afc", "rc", "losc", "ogc", "krc", "kaa",
            "rsc", "vfb", "vfl", "tsg", "sv", "1907", "1909", "1899", "cp", "sk", "fk", "nk", "gnk", "rcd", "cd",
@@ -269,10 +272,15 @@ class Liga:
             return None
         L1h, L1a = self.sr_ligi("gz_h"), self.sr_ligi("gs_h")
         L2h, L2a = lg.sr_ligi("gz_h"), lg.sr_ligi("gs_h")
-        atk_h = self.sr(sh, "gz_h") / L1h
-        obr_h = self.sr(sh, "gs_h") / L1a
-        atk_a = self.sr(sa, "gs_h") / L2a   # gole strzelone przez gościa
-        obr_a = self.sr(sa, "gz_h") / L2h   # gole stracone przez gościa
+        K = 4.0   # "wirtualne" mecze ze średnią ligi: mniej przesady przy małej liczbie meczów (beniaminki)
+
+        def srs(st, key, srednia):
+            n = st.get("n_" + key, 0)
+            return (st.get(key, 0) + srednia * K) / (n + K) if srednia is not None else self.sr(st, key)
+        atk_h = srs(sh, "gz_h", L1h) / L1h
+        obr_h = srs(sh, "gs_h", L1a) / L1a
+        atk_a = srs(sa, "gs_h", L2a) / L2a   # gole strzelone przez gościa
+        obr_a = srs(sa, "gz_h", L2h) / L2h   # gole stracone przez gościa
         ratio = sila_h / sila_g
         lam_h = atk_h * obr_a * (L1h + L2h) / 2 * ratio
         lam_a = atk_a * obr_h * (L1a + L2a) / 2 / ratio
@@ -280,10 +288,10 @@ class Liga:
 
         # kartki/rożne każdej drużyny: (jej średnia + ile pozwala rywal) / 2
         def ocz(k_dom, k_wyj):
-            a1, a2 = self.sr(sh, k_dom), self.sr(sa, k_dom)   # gospodarza / rywale gościa
-            b1, b2 = self.sr(sh, k_wyj), self.sr(sa, k_wyj)   # rywale gospodarza / gościa
-            if None in (a1, a2, b1, b2):
+            if None in (self.sr(sh, k_dom), self.sr(sa, k_dom), self.sr(sh, k_wyj), self.sr(sa, k_wyj)):
                 return None, None
+            a1, a2 = srs(sh, k_dom, self.sr_ligi(k_dom)), srs(sa, k_dom, lg.sr_ligi(k_dom))
+            b1, b2 = srs(sh, k_wyj, self.sr_ligi(k_wyj)), srs(sa, k_wyj, lg.sr_ligi(k_wyj))
             return (a1 + a2) / 2, (b1 + b2) / 2
         wynik["kartki_h"], wynik["kartki_a"] = ocz("k_h", "k_a")
         wynik["rozne_h"], wynik["rozne_a"] = ocz("r_h", "r_a")
@@ -543,8 +551,11 @@ def kursy_odds_api(klucz, kody, cache, ttl_h, regiony="eu"):
                 cache.set(ck, dane)
                 print(f"  Kursy {NAZWY.get(kod, kod)}: {len(dane)} meczów (zostało zapytań: {nag.get('x-requests-remaining')})")
             except Exception as e:
-                print(f"  Kursy {NAZWY.get(kod, kod)}: nie pobrano ({e})")
-                continue
+                dane = cache.get(ck)              # limit wyczerpany / błąd -> ostatnie zapamiętane kursy
+                print(f"  Kursy {NAZWY.get(kod, kod)}: nie pobrano ({e})"
+                      + (" - używam ostatnich zapamiętanych" if dane else ""))
+                if not dane:
+                    continue
         lista = []
         for ev in dane:
             rynki = {}
@@ -598,7 +609,7 @@ class ApiFootball:
         if dane is not None:
             return dane
         if self.wyczerpane:
-            return None
+            return self.cache.get("af|" + sciezka)   # stare dane lepsze niż żadne
         import time
         try:
             j, nag = pobierz_json(AF + sciezka, {"x-apisports-key": self.klucz})
@@ -608,7 +619,8 @@ class ApiFootball:
                 print(f"  API-Football: {j['errors']}")
                 if "requests" in str(j["errors"]).lower() or "limit" in str(j["errors"]).lower():
                     self.wyczerpane = True
-                return None
+                    print("  API-Football: dzienny limit wyczerpany - dalej używam zapamiętanych danych")
+                return self.cache.get("af|" + sciezka)
             if nag.get("x-ratelimit-requests-remaining") == "0":
                 self.wyczerpane = True
             if zapisz:
@@ -616,7 +628,7 @@ class ApiFootball:
             return j["response"]
         except Exception as e:
             print(f"  API-Football: błąd {e}")
-            return None
+            return self.cache.get("af|" + sciezka)
 
 
 def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=10):
