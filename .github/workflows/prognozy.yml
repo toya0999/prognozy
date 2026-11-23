@@ -24,10 +24,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: cache_api.json
+          key: cache-api-${{ github.run_id }}
+          restore-keys: cache-api-
       - name: Generuj strone
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
         run: |
           mkdir -p strona
-          python prognozy_pilka.py --dni 3 --max-proc 85 --nie-otwieraj \
+          python prognozy_pilka.py --dni 3 --max-proc 85 --nie-otwieraj --kursy-co 48 \
             --html strona/index.html \
             --odswiez-url "https://github.com/${{ github.repository }}/actions/workflows/prognozy.yml"
       - uses: actions/configure-pages@v5
