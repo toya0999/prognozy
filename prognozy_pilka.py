@@ -325,6 +325,14 @@ class Liga:
                 wynik["kartki"] *= f
                 wynik["sedzia"] = (sedzia, f)
         if liga_g:
+            # puchary: strzały i rożne też zależą od siły lig (łagodniej niż gole)
+            r_s = (sila_h / sila_g) ** (SILA_POTEGA / 2)
+            for co in ("strzaly", "celne", "rozne"):
+                if wynik.get(co + "_h") is not None:
+                    wynik[co + "_h"] *= r_s
+                    wynik[co + "_a"] /= r_s
+            if wynik.get("rozne_h") is not None:
+                wynik["rozne"] = wynik["rozne_h"] + wynik["rozne_a"]
             wynik["h2h"] = []
             return wynik
 
@@ -761,13 +769,33 @@ class ApiFootball:
             return self.cache.get("af|" + sciezka)
 
 
-def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=10):
+DNI_WSTECZ = 24   # ile dni wstecz szukać ostatnich meczów drużyn
+
+
+def lista_dnia(af, dzien, ttl_h):
+    """Mecze z danego dnia (YYYY-MM-DD) w skróconej postaci - zapamiętywane, żeby nie zużywać limitu."""
+    k = f"afd|{dzien}"
+    dane = af.cache.get(k, ttl_h)
+    if dane is not None:
+        return dane
+    pelne = af.get(f"/fixtures?date={dzien}&timezone=Europe/Warsaw", zapisz=False)
+    if pelne is None:
+        return af.cache.get(k) or []
+    dane = [{"fixture": {"id": f["fixture"]["id"], "status": {"short": (f["fixture"].get("status") or {}).get("short")}},
+             "teams": {"home": {"id": f["teams"]["home"]["id"], "name": f["teams"]["home"]["name"]},
+                       "away": {"id": f["teams"]["away"]["id"], "name": f["teams"]["away"]["name"]}},
+             "goals": f.get("goals")} for f in pelne]
+    af.cache.set(k, dane)
+    return dane
+
+
+def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=6):
     """Typy na zawodników z serią albo dużą szansą. Zwraca listę typów (jak dla meczu)."""
     import math
     if not data:
         return []
     dzien = datetime.strptime(data, "%d/%m/%Y").strftime("%Y-%m-%d")
-    lista = af.get(f"/fixtures?date={dzien}&timezone=Europe/Warsaw", ttl_h=12) or []
+    lista = lista_dnia(af, dzien, 12)
     idx = {}
     for f in lista:
         idx.setdefault(normalizuj(f["teams"]["home"]["name"]), []).append(f)
@@ -782,11 +810,23 @@ def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=10):
         return []
     druzyny = [(mecz["teams"]["home"], lam_h, "H"), (mecz["teams"]["away"], lam_a, "A")]
     ostatnie, info = {}, {}
+    # Darmowy plan nie ma parametru "last" -> ostatnie mecze drużyn bierzemy z list meczów z poprzednich dni
+    # (każdy dzień pobierany raz i zapamiętywany na stałe)
     for t, _, _ in druzyny:
-        r = af.get(f"/fixtures?team={t['id']}&last={ile}", ttl_h=20) or []
-        ostatnie[t["id"]] = [f["fixture"]["id"] for f in r]
-        for f in r:
-            info[f["fixture"]["id"]] = {"gole": f.get("goals"), "teams": f.get("teams")}
+        ostatnie[t["id"]] = []
+    dzis = datetime.now().date()
+    for n in range(1, DNI_WSTECZ + 1):
+        if all(len(v) >= ile for v in ostatnie.values()):
+            break
+        d = (dzis - timedelta(days=n)).strftime("%Y-%m-%d")
+        lista_d = lista_dnia(af, d, None if n > 2 else 6)
+        for f in lista_d:
+            if ((f.get("fixture") or {}).get("status") or {}).get("short") not in ("FT", "AET", "PEN"):
+                continue
+            for t, _, _ in druzyny:
+                if t["id"] in (f["teams"]["home"]["id"], f["teams"]["away"]["id"]) and len(ostatnie[t["id"]]) < ile:
+                    ostatnie[t["id"]].append(f["fixture"]["id"])
+                    info[f["fixture"]["id"]] = {"gole": f.get("goals"), "teams": f.get("teams")}
 
     def zapisz_fx(fid, gracze_bloki):
         dane = info.get(fid, {})
@@ -800,18 +840,9 @@ def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=10):
         c = af.cache.get(f"af|fx|{fid}")
         return bool(c and c.get("players"))
 
-    # 1) zbiorczo: do 20 meczów w jednym zapytaniu
-    potrzebne = [i for ids in ostatnie.values() for i in ids if not ma_dane(i)]
-    for n in range(0, len(potrzebne), 20):
-        paczka = potrzebne[n:n + 20]
-        for f in af.get("/fixtures?ids=" + "-".join(map(str, paczka)), zapisz=False) or []:
-            fid = f["fixture"]["id"]
-            info.setdefault(fid, {"gole": f.get("goals"), "teams": f.get("teams")})
-            if f.get("players"):
-                zapisz_fx(fid, f["players"])
-    # 2) zapas: gdy plan nie zwraca zawodników zbiorczo -> osobno, 5 ostatnich meczów każdej drużyny
+    # statystyki zawodników: osobno dla każdego meczu (zapamiętywane na stałe)
     for t, _, _ in druzyny:
-        for fid in ostatnie.get(t["id"], [])[:5]:
+        for fid in ostatnie.get(t["id"], []):
             if ma_dane(fid) or af.wyczerpane:
                 continue
             r = af.get(f"/fixtures/players?fixture={fid}", zapisz=False)
@@ -1174,7 +1205,7 @@ def wyniki_fixturedownload(laduj_tekst, slug):
 def statystyki_af(af, e):
     """Wynik i statystyki meczu z API-Football (gdy football-data jeszcze ich nie ma)."""
     dzien = datetime.strptime(e["data"], "%d/%m/%Y").strftime("%Y-%m-%d")
-    lista = af.get(f"/fixtures?date={dzien}&timezone=Europe/Warsaw", ttl_h=2) or []
+    lista = lista_dnia(af, dzien, 2)
     idx = {}
     for f in lista:
         idx.setdefault(normalizuj(f["teams"]["home"]["name"]), []).append(f)
