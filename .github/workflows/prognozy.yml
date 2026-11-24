@@ -26,7 +26,9 @@ jobs:
           python-version: "3.12"
       - uses: actions/cache@v4
         with:
-          path: cache_api.json
+          path: |
+            cache_api.json
+            historia.json
           key: cache-api-${{ github.run_id }}
           restore-keys: cache-api-
       - name: Generuj strone
@@ -35,7 +37,7 @@ jobs:
           APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
         run: |
           mkdir -p strona
-          python prognozy_pilka.py --dni 3 --max-proc 85 --nie-otwieraj --kursy-co 48 \
+          python prognozy_pilka.py --dni 3 --max-proc 85 --nie-otwieraj --kursy-co 48 --backtest 200 \
             --html strona/index.html \
             --odswiez-url "https://github.com/${{ github.repository }}/actions/workflows/prognozy.yml"
       - uses: actions/configure-pages@v5
