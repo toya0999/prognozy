@@ -37,16 +37,19 @@ from datetime import date, datetime, timedelta, timezone
 
 BASE = "https://www.football-data.co.uk"
 DOMYSLNE_LIGI = "E0,E1,SP1,I1,D1,F1,N1,P1,B1,T1,SC0,POL,ARG,BRA,LM,LE,LK"
-NOWE_LIGI = {"ARG": "Argentina", "BRA": "Brazil", "POL": "Poland"}           # pliki /new/ (bez kartek i rożnych)
+NOWE_LIGI = {"ARG": "Argentina", "BRA": "Brazil", "POL": "Poland", "AUT": "Austria", "DNK": "Denmark",
+             "SWZ": "Switzerland", "NOR": "Norway", "SWE": "Sweden", "ROU": "Romania"}           # pliki /new/ (bez kartek i rożnych)
 PUCHARY = {"LM": "champions-league", "LE": "europa-league", "LK": "conference-league"}
 # zapasowy terminarz lig z fixturedownload.com (cały sezon rozpisany z góry)
 TERMINARZ_FD = {"E0": "epl", "E1": "championship", "SP1": "la-liga", "I1": "serie-a", "D1": "bundesliga",
                 "F1": "ligue-1", "N1": "eredivisie", "P1": "primeira-liga", "T1": "super-lig",
                 "SC0": "scottish-premiership"}
-LIGI_DLA_PUCHAROW = ["E0", "E1", "SP1", "I1", "D1", "F1", "N1", "P1", "B1", "T1", "SC0", "G1", "POL"]
+LIGI_DLA_PUCHAROW = ["E0", "E1", "SP1", "I1", "D1", "F1", "N1", "P1", "B1", "T1", "SC0", "G1", "POL",
+                     "AUT", "DNK", "SWZ", "NOR", "SWE", "ROU"]
 # przybliżona siła lig (do meczów pucharowych między ligami)
 SILA = {"E0": 1.0, "SP1": 0.93, "I1": 0.92, "D1": 0.92, "F1": 0.88, "P1": 0.80, "N1": 0.80,
-        "E1": 0.74, "B1": 0.76, "T1": 0.76, "SC0": 0.68, "G1": 0.70, "ARG": 0.72, "BRA": 0.76, "POL": 0.66}
+        "E1": 0.74, "B1": 0.76, "T1": 0.76, "SC0": 0.68, "G1": 0.70, "ARG": 0.72, "BRA": 0.76, "POL": 0.66,
+        "AUT": 0.70, "DNK": 0.68, "SWZ": 0.68, "NOR": 0.64, "SWE": 0.62, "ROU": 0.60}
 SILA_POTEGA = 2.0
 # Ustawienia modelu (nadpisywane parametrami). "stary" model = bez ulepszeń, do porównania w backteście.
 MODEL = {"polowa": 120, "rho": -0.08, "waga_modelu": 0.5, "sedzia": True, "kalibracja": True}
@@ -55,7 +58,8 @@ KALIBRACJA = {}   # kategoria rynku -> [(średnia prognoza, faktycznie weszło),
 NAZWY = {"E0": "Premier League", "E1": "Championship", "SP1": "LaLiga", "I1": "Serie A",
          "D1": "Bundesliga", "F1": "Ligue 1", "N1": "Eredivisie", "P1": "Portugalia",
          "T1": "Turcja", "B1": "Belgia", "SC0": "Szkocja", "G1": "Grecja",
-         "ARG": "Argentyna", "BRA": "Brazylia", "POL": "Ekstraklasa", "LM": "Liga Mistrzów", "LE": "Liga Europy",
+         "ARG": "Argentyna", "BRA": "Brazylia", "POL": "Ekstraklasa", "AUT": "Austria", "DNK": "Dania", "SWZ": "Szwajcaria",
+         "NOR": "Norwegia", "SWE": "Szwecja", "ROU": "Rumunia", "LM": "Liga Mistrzów", "LE": "Liga Europy",
          "LK": "Liga Konferencji"}
 
 
@@ -190,6 +194,8 @@ ALIASY = {
     "union saint gilloise": "st gilloise", "union sg": "st gilloise", "fenerbahce": "fenerbahce",
     "olympiakos": "olympiakos", "olympiacos": "olympiakos", "paok": "paok", "celta vigo": "celta",
     "gladbach": "m gladbach", "borussia monchengladbach": "m gladbach", "mainz 05": "mainz",
+    "red bull salzburg": "salzburg", "rb salzburg": "salzburg", "rapid wien": "rapid vienna",
+    "kobenhavn": "copenhagen", "fc copenhagen": "copenhagen", "bodo glimt": "bodo glimt",
     "legia warsaw": "legia", "legia warszawa": "legia", "lech poznan": "lech", "rakow czestochowa": "rakow",
     "jagiellonia bialystok": "jagiellonia", "pogon szczecin": "pogon", "gornik zabrze": "gornik",
     "az": "az alkmaar", "istanbul basaksehir": "buyuksehyr", "basaksehir": "buyuksehyr",
@@ -328,8 +334,10 @@ class Liga:
                 wynik["sedzia"] = (sedzia, f)
         if liga_g:
             # puchary: strzały i rożne też zależą od siły lig (łagodniej niż gole)
-            r_s = (sila_h / sila_g) ** (SILA_POTEGA / 2)
-            for co in ("strzaly", "celne", "rozne"):
+            # strzały i celne tak mocno jak gole (słabszy rywal z silniejszej ligi strzela dużo mniej),
+            # rożne łagodniej
+            for co, pot in (("strzaly", SILA_POTEGA), ("celne", SILA_POTEGA), ("rozne", SILA_POTEGA / 2)):
+                r_s = (sila_h / sila_g) ** pot
                 if wynik.get(co + "_h") is not None:
                     wynik[co + "_h"] *= r_s
                     wynik[co + "_a"] /= r_s
@@ -503,6 +511,8 @@ def skutecznosc(mecze, druzyna, spec, odwroc=False):
 
 
 def ostatnie_mecze(liga, druzyna, n):
+    if liga is None:
+        return []
     m = [w for w in liga.wszystkie if druzyna in (w["HomeTeam"].strip(), w["AwayTeam"].strip())]
     m.sort(key=data_meczu, reverse=True)
     return m[:n]
@@ -1193,9 +1203,13 @@ def wczytaj_historie(sciezka):
 
 
 def zapisz_historie(historia, sciezka):
-    granica = datetime.now() - timedelta(days=60)
+    granica = datetime.now() - timedelta(days=365)
     historia = {k: v for k, v in historia.items()
                 if datetime.strptime(v["data"], "%d/%m/%Y") >= granica}
+    for v in historia.values():          # rozliczone mecze: tylko to, co potrzebne do statystyk (mniejszy plik)
+        if v.get("koniec"):
+            v["typy"] = [{k: t[k] for k in ("typ", "p", "kurs", "rk", "traf", "k0", "v0") if k in t}
+                         for t in v["typy"] if t.get("traf") is not None]
     with open(sciezka, "w", encoding="utf-8") as f:
         json.dump(historia, f, ensure_ascii=False)
     return historia
@@ -1262,7 +1276,12 @@ def statystyki_af(af, e):
     if not mecz or (mecz.get("fixture", {}).get("status", {}) or {}).get("short") not in ("FT", "AET", "PEN"):
         return None
     w = {"FTHG": (mecz.get("goals") or {}).get("home"), "FTAG": (mecz.get("goals") or {}).get("away")}
-    st = af.get(f"/fixtures/statistics?fixture={mecz['fixture']['id']}") or []
+    ks = f"af|st|{mecz['fixture']['id']}"
+    st = af.cache.get(ks)
+    if not st:
+        st = af.get(f"/fixtures/statistics?fixture={mecz['fixture']['id']}", zapisz=False) or []
+        if st:                                   # pusta odpowiedź (statystyki jeszcze niegotowe) - nie zapamiętujemy
+            af.cache.set(ks, st)
     mapa = {"Corner Kicks": ("HC", "AC"), "Yellow Cards": ("HY", "AY"), "Red Cards": ("HR", "AR"),
             "Total Shots": ("HS", "AS"), "Shots on Goal": ("HST", "AST")}
     for blok in st:
@@ -1333,7 +1352,8 @@ def zapisz_rozliczenie(historia, sciezka):
         for t in e["typy"]:
             if t.get("traf") is None:
                 continue
-            dane.append({"d": e["data"], "g": e.get("godz", ""), "m": f'{e["hp"]} – {e["gp"]}', "l": e["liga"],
+            dane.append({"id": f'{e["data"]}|{e["hp"]}|{e["gp"]}', "d": e["data"], "g": e.get("godz", ""),
+                         "m": f'{e["hp"]} – {e["gp"]}', "l": e["liga"],
                          "w": e["wynik"], "t": t["typ"], "p": t["p"], "k": t.get("kurs"),
                          "r": t.get("rk", ""), "ok": t["traf"], "k0": t.get("k0"), "v0": t.get("v0")})
     oczekuje = sum(1 for e in historia.values() if "wynik" not in e)
@@ -1353,7 +1373,7 @@ body{margin:0;font:14px/1.45 system-ui,Segoe UI,Arial;background:var(--bg);color
 .m{color:var(--mut);font-size:12px}table{width:100%;border-collapse:collapse}td,th{padding:6px 8px;border-bottom:1px solid var(--lin);text-align:left;white-space:nowrap}
 th{font-size:11px;color:var(--mut);text-transform:uppercase}a{color:#4a7bd0}
 .chipy{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.chip{padding:6px 14px;border-radius:999px;border:1px solid var(--lin);background:var(--card);color:var(--txt);font-weight:600;cursor:pointer}
-.chip.on{background:#305496;color:#fff;border-color:#305496}.plus{color:#00b050;font-weight:700}.minus{color:#e0533d;font-weight:700}
+.chip.on{background:#305496;color:#fff;border-color:#305496}.plus{color:#00b050;font-weight:700}.k:empty{display:none}#dni{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}#dni .chip{flex:0 0 auto}.minus{color:#e0533d;font-weight:700}
 </style></head><body><main>
 <p><a href="index.html">&larr; Wróć do prognoz</a></p>
 <h1 style="font-size:20px">Rozliczenie typów (stawka 100 zł na zdarzenie)</h1>
@@ -1364,6 +1384,10 @@ Mecze czekające na wynik: __CZEKA__.</p>
 <label class="m">Liga <select id="liga" style="padding:4px 8px;border-radius:6px"><option value="">wszystkie</option></select></label>
 &nbsp; <label class="m"><input type="checkbox" id="pod"> uwzględnij podatek 12%</label>
 <div class="k" id="tab"></div>
+<div class="k" id="strat"></div>
+<div class="k" id="bilans"></div>
+<div class="k" id="rynkiTab"></div>
+<div class="k" id="ligiTab"></div>
 <div class="k"><p class="m"><b>Jak czytać:</b> „Z kursem bukmachera” to prawdziwy wynik w zł (tylko typy, dla których był kurs:
 1X2 i gole). „Szacunek” liczy wszystkie typy po kursie uczciwym pomniejszonym o typową marżę 7% &mdash; bukmacherzy dają podobne
 kursy na rożne i kartki, ale to tylko przybliżenie. Najważniejsze: czy „weszło” zgadza się z „model mówił”.</p></div>
@@ -1405,6 +1429,35 @@ tab.innerHTML=xs.length?`<table><tr><th>Prawdopodobieństwo</th><th>Typów</th><
 <tr><td><b>RAZEM</b></td><td><b>${S.n}</b></td><td><b>${S.t}</b></td><td>${(S.sp/S.n).toFixed(1)}%</td><td><b>${(S.t/S.n*100).toFixed(1)}%</b></td>
 <td>${S.kn?S.kn+" &middot; "+zl(S.kz):"-"}</td><td>${zl(S.sz)}</td></tr></table>
 <p class="m">Postawiono łącznie ${S.n*100} zł (100 zł na każde zdarzenie).</p>`:'<p>Brak rozliczonych typów. Typy zapisują się przed meczem, a rozliczają kilka godzin po jego końcu.</p>';
+// ---- baza: strategie, bilans dzień po dniu, rynki, ligi ----
+const zK=x=>x.k?(x.ok?100*P*x.k:0)-100:0, zS=x=>(x.ok?100*P*(1/x.p)*0.93:0)-100;
+const podsum=g=>({n:g.length,t:g.filter(x=>x.ok).length,sp:g.reduce((s,x)=>s+x.p,0)/(g.length||1)*100,
+ kn:g.filter(x=>x.k).length,kz:g.reduce((s,x)=>s+zK(x),0),sz:g.reduce((s,x)=>s+zS(x),0)});
+const wiersz=(nazwa,q)=>`<tr><td><b>${nazwa}</b></td><td>${q.n}</td><td>${(q.t/(q.n||1)*100).toFixed(1)}%</td><td>${q.sp.toFixed(1)}%</td>
+<td>${q.kn?q.kn+" &middot; "+zl(q.kz):"-"}</td><td>${zl(q.sz)}</td><td>${(q.sz/(q.n*100||1)*100).toFixed(1)}%</td></tr>`;
+const nag=`<tr><th></th><th>Typów</th><th>Weszło</th><th>Model mówił</th><th>Z kursem bukm.</th><th>Szacunek</th><th>ROI (szac.)</th></tr>`;
+const grupuj=f=>{const G={};xs.forEach(x=>{(G[f(x)]=G[f(x)]||[]).push(x)});return Object.entries(G).map(([k,g])=>[k,podsum(g)]).sort((a,b)=>b[1].n-a[1].n)};
+if(xs.length){
+const ids={};xs.forEach(x=>{if(!ids[x.id]||x.p>ids[x.id].p)ids[x.id]=x});
+const S1=Object.values(ids),S2=xs.filter(x=>x.v0&&x.k),S3=xs.filter(x=>x.p>=0.7&&x.p<0.85),S4=xs.filter(x=>x.p>=0.85);
+strat.innerHTML=`<h3 style="margin:0 0 6px;font-size:16px">Strategie (100 zł na każde zdarzenie)</h3><div style="overflow-x:auto"><table>${nag}
+${wiersz("Najpewniejszy typ każdego meczu",podsum(S1))}${wiersz("Value bety (kurs bukmachera)",podsum(S2))}
+${wiersz("Wszystkie typy 70–85%",podsum(S3))}${wiersz("Wszystkie typy 85% i więcej",podsum(S4))}${wiersz("Wszystkie typy",podsum(xs))}</table></div>
+<p class="m">Szacunek: typy bez kursu bukmachera liczone po kursie uczciwym minus 7% marży. Value bety: prawdziwe kursy.</p>`;
+const dni=[...new Set(xs.map(x=>x.d))].sort((a,b)=>ts(a)-ts(b));let cs=0,ck=0;const ps=[],pk=[],rows=[];
+dni.forEach(d=>{const q=podsum(xs.filter(x=>x.d===d));cs+=q.sz;ck+=q.kz;ps.push(cs);pk.push(ck);
+rows.push(`<tr><td>${d.slice(0,5).replace("/",".")}</td><td>${q.n}</td><td>${(q.t/q.n*100).toFixed(0)}%</td><td>${zl(q.sz)}</td><td>${zl(cs)}</td></tr>`)});
+const W=600,H=150,all=[...ps,...pk,0],lo=Math.min(...all),hi=Math.max(...all),rg=(hi-lo)||1,
+pt=a=>a.map((v,i)=>`${a.length>1?i/(a.length-1)*W:W/2},${H-(v-lo)/rg*H}`).join(" "),y0=H-(0-lo)/rg*H;
+bilans.innerHTML=`<h3 style="margin:0 0 6px;font-size:16px">Bilans dzień po dniu</h3>
+${dni.length>1?`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:150px"><line x1="0" x2="${W}" y1="${y0}" y2="${y0}" stroke="#888" stroke-dasharray="4 4"/>
+<polyline fill="none" stroke="#4a7bd0" stroke-width="2" vector-effect="non-scaling-stroke" points="${pt(ps)}"/>
+<polyline fill="none" stroke="#00b050" stroke-width="2" vector-effect="non-scaling-stroke" points="${pt(pk)}"/></svg>
+<p class="m"><span style="color:#4a7bd0">&#9644;</span> szacunek (wszystkie typy) &nbsp; <span style="color:#00b050">&#9644;</span> z kursem bukmachera</p>`:""}
+<div style="overflow-x:auto"><table><tr><th>Dzień</th><th>Typów</th><th>Weszło</th><th>Wynik dnia (szac.)</th><th>Razem (szac.)</th></tr>${rows.reverse().join("")}</table></div>`;
+rynkiTab.innerHTML=`<h3 style="margin:0 0 6px;font-size:16px">Według rynku</h3><div style="overflow-x:auto"><table>${nag}${grupuj(x=>RN[x.r]||x.r||"inne").map(([k,q])=>wiersz(k,q)).join("")}</table></div>`;
+ligiTab.innerHTML=`<h3 style="margin:0 0 6px;font-size:16px">Według ligi</h3><div style="overflow-x:auto"><table>${nag}${grupuj(x=>x.l).map(([k,q])=>wiersz(k,q)).join("")}</table></div>`;
+}else{strat.innerHTML=bilans.innerHTML=rynkiTab.innerHTML=ligiTab.innerHTML=""}
 lista.innerHTML=xs.length?`<table><tr><th>Data</th><th>Mecz</th><th>Wynik</th><th>Typ</th><th>Szansa</th><th>Kurs</th><th></th></tr>
 ${xs.slice().sort((a,b)=>ts(b.d)-ts(a.d)||b.p-a.p).map(x=>`<tr><td>${x.d.slice(0,5)}</td><td>${x.m} <span class="m">${x.l}</span></td><td>${x.w}</td>
 <td>${x.t}</td><td>${(x.p*100).toFixed(0)}%</td><td>${x.k?x.k.toFixed(2):"-"}</td><td>${x.ok?"&#x2705;":"&#x274C;"}</td></tr>`).join("")}</table>`:""}
@@ -1556,7 +1609,10 @@ th{font-size:11px;text-transform:uppercase;color:var(--mut);font-weight:600}
 .bar i{display:block;height:100%}.val{background:#ffd700;color:#000;font-weight:700;padding:1px 6px;border-radius:6px;font-size:11px}
 .leg{font-size:12px;color:var(--mut);margin:0 0 12px}.ukryj{display:none}
 @media(max-width:640px){.leg{display:none}}
-.c-br{display:none}.fsum{cursor:pointer;font-weight:600;font-size:13px;color:var(--mut);margin-bottom:6px;list-style:none}
+.c-br{display:none}.top{cursor:pointer;position:relative;padding-right:34px!important}
+.strz{position:absolute;right:14px;top:12px;font-size:16px;color:var(--mut)}
+.skrot{display:none;margin-top:6px;font-size:13px}.mecz.zw .skrot{display:block}.mecz.zw .wrap,.mecz.zw .info{display:none}
+.zwbar{display:flex;gap:6px;margin:0 0 10px}.fsum{cursor:pointer;font-weight:600;font-size:13px;color:var(--mut);margin-bottom:6px;list-style:none}
 .fsum::-webkit-details-marker{display:none}
 @media(max-width:640px){
 header{position:static;padding:10px 12px}h1{font-size:16px;line-height:1.4}
@@ -1778,15 +1834,23 @@ lista.innerHTML=t.length?`<div class="mecz"><div class="wrap"><table><tr><th></t
 ${t.map(x=>`<tr>${wiersz(x).replace("</td>",`</td><td class="c-m"><b>${x.m.h} &ndash; ${x.m.g}</b><br><span style="color:var(--mut);font-size:11px">${x.m.liga} &middot; ${x.m.data} ${x.m.godz}</span></td>`)}</tr>`).join("")}</table></div></div>`:'<p>Brak typów przy tych filtrach.</p>';return}
 const mecze=D.filter(pasuje).map(m=>({m,t:sortuj(m.typy.filter(ok))})).filter(z=>z.t.length);
 if(sort.value!=="p")mecze.sort((a,b)=>KLUCZ[sort.value](a.t[0])-KLUCZ[sort.value](b.t[0]));
-for(const {m,t} of mecze){
-html+=`<div class="mecz"><div class="top"><span class="m">${m.liga} &middot; ${m.data} ${m.godz}</span><br><b>${m.h} &ndash; ${m.g}</b>
-<div class="info"><span>Oczekiwane gole: <b>${m.lh} : ${m.la}</b></span>${m.kartki?`<span>Kartki ~<b>${m.kartki}</b></span>`:""}${m.rozne?`<span>Rożne ~<b>${m.rozne}</b></span>`:""}${m.sedzia?`<span>Sędzia: <b>${m.sedzia}</b></span>`:""}
+for(const {m,t} of mecze){const mk=m.h+"|"+m.g+"|"+m.data,zw=ZWIN_DOM!==PRZEL.has(mk),naj=t[0];
+html+=`<div class="mecz${zw?" zw":""}" data-mk="${mk}"><div class="top"><span class="strz">${zw?"&#9656;":"&#9662;"}</span><span class="m">${m.liga} &middot; ${m.data} ${m.godz}</span><br><b>${m.h} &ndash; ${m.g}</b>
+<div class="skrot">${naj.typ} <span class="p ${kl(naj.p)}" style="min-width:0;padding:0 8px">${naj.p}%</span> <span class="m">&middot; typów: ${t.length} &middot; dotknij, aby rozwinąć</span></div>
+<div class="info"><span>Oczekiwane gole: <b>${m.lh} : ${m.la}</b></span>${m.kartki?`<span>Kartki ~<b>${m.kartki}</b></span>`:""}${m.rozne?`<span>Rożne ~<b>${m.rozne}</b></span>`:""}${m.sedzia?`<span>Sędzia: <b>${m.sedzia}</b></span>`:""}${m.z_kursow?`<span title="Jedna z drużyn gra w lidze spoza bazy danych">&#x2139;&#xFE0F; prognoza tylko z kursów bukmacherów</span>`:""}
 <span>Najczęstsze wyniki: ${m.wyniki.join(", ")}</span></div>
 <div class="info"><span>H2H: ${m.h2h.length?m.h2h.join(" &middot; "):"brak meczów"}</span></div></div>
 <div class="wrap"><table><tr><th></th><th>Typ</th><th>Prawd.</th><th>Uczciwy kurs</th><th>Kurs rynku</th><th>Forma ${m.h}</th><th>Forma ${m.g}</th><th>H2H</th></tr>
 ${t.map(x=>`<tr>${wiersz(x)}</tr>`).join("")}
 </table></div></div>`}
-lista.innerHTML=html||'<p>Brak typów przy tych filtrach.</p>'}
+lista.innerHTML=(html?`<div class="zwbar"><button class="kbt sz" id="zwAll">&#9656; Zwiń wszystkie</button><button class="kbt sz" id="rozAll">&#9662; Rozwiń wszystkie</button></div>`:"")+(html||'<p>Brak typów przy tych filtrach.</p>')}
+let ZWIN_DOM=innerWidth<=640;const PRZEL=new Set();
+lista.addEventListener("click",e=>{
+if(e.target.closest("#zwAll")){ZWIN_DOM=true;PRZEL.clear();rys();return}
+if(e.target.closest("#rozAll")){ZWIN_DOM=false;PRZEL.clear();rys();return}
+const top=e.target.closest(".top");if(!top||e.target.closest("button,a,input"))return;
+const k=top.parentElement.dataset.mk;if(!k)return;PRZEL.has(k)?PRZEL.delete(k):PRZEL.add(k);
+const zw=ZWIN_DOM!==PRZEL.has(k);top.parentElement.classList.toggle("zw",zw);top.querySelector(".strz").innerHTML=zw?"&#9656;":"&#9662;"});
 if(location.hostname==="localhost"||location.hostname==="127.0.0.1")setTimeout(()=>location.reload(),15*60*1000);
 for(const e of [min,minf,val,szukaj,sort,razem,kat,liga])e.addEventListener("input",rys);wczytaj();rys();kupon();generuj();
 if(innerWidth<=640){filtrDet.open=false;vb.open=false;gen.open=false}
@@ -2191,6 +2255,16 @@ def uruchom(a, otworz=True):
             print(f"  [zawodnicy] zbieranie: błąd {e}")
     # ---- dziennik typów: rozliczenie zakończonych meczów ----
     historia = wczytaj_historie(a.historia)
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    if not historia and "/" in repo and not a.dane:
+        # pamięć GitHuba wyczyszczona -> odtwarzamy bazę z kopii opublikowanej na stronie
+        try:
+            j, _ = pobierz_json(f"https://{repo.split('/')[0]}.github.io/{repo.split('/')[1]}/historia.json")
+            if isinstance(j, dict):
+                historia = j
+                print(f"Baza typów: odtworzona z kopii na stronie ({len(historia)} meczów)")
+        except Exception as e:
+            print(f"Baza typów: brak kopii na stronie ({e})")
     wyniki_fd = {}
     if historia:
         rok_fd = int("20" + sezony[0][:2])
@@ -2207,13 +2281,28 @@ def uruchom(a, otworz=True):
             pop = lambda n: "Paris SG" if normalizuj(n) == "paris" else n
             zh, zg = indeks.get(znajdz(pop(h_pokaz), indeks)), indeks.get(znajdz(pop(g_pokaz), indeks))
             if not zh or not zg:
+                # drużyna z ligi spoza bazy: gole i wynik liczone z kursów bukmacherów (bez rożnych/kartek)
                 brak = h_pokaz if not zh else g_pokaz
-                print(f"\n{NAZWY[kod]} {h_pokaz} - {g_pokaz}: brak danych o {brak} (liga spoza bazy)")
-                continue
-            print(f"   [puchar] {h_pokaz} -> {zh[1]} ({zh[0]}), {g_pokaz} -> {zg[1]} ({zg[0]})")
-            (kod_h, h), (kod_g, g) = zh, zg
-            liga_h, liga_g = modele[kod_h], modele[kod_g]
-            pr = liga_h.prognoza(h, g, liga_g, SILA.get(kod_h, 0.7), SILA.get(kod_g, 0.7))
+                try:
+                    d_k = datetime.strptime(w.get("Date", ""), "%d/%m/%Y").date()
+                except ValueError:
+                    d_k = None
+                k_r = dict(dopasuj_kursy(kursy_api, kod, h_pokaz, g_pokaz, d_k))
+                lam_r = lambdy_rynku(k_r)
+                if not lam_r:
+                    print(f"\n{NAZWY[kod]} {h_pokaz} - {g_pokaz}: brak danych o {brak} i brak kursów - pomijam")
+                    continue
+                print(f"   [puchar] {h_pokaz} - {g_pokaz}: brak danych o {brak} -> prognoza z kursów bukmacherów")
+                h = zh[1] if zh else h_pokaz
+                g = zg[1] if zg else g_pokaz
+                liga_h = modele[zh[0]] if zh else None
+                liga_g = modele[zg[0]] if zg else None
+                pr = {"lam_h": lam_r[0], "lam_a": lam_r[1], "h2h": [], "z_kursow": True}
+            else:
+                print(f"   [puchar] {h_pokaz} -> {zh[1]} ({zh[0]}), {g_pokaz} -> {zg[1]} ({zg[0]})")
+                (kod_h, h), (kod_g, g) = zh, zg
+                liga_h, liga_g = modele[kod_h], modele[kod_g]
+                pr = liga_h.prognoza(h, g, liga_g, SILA.get(kod_h, 0.7), SILA.get(kod_g, 0.7))
         else:
             h, g = h_pokaz, g_pokaz
             liga_h = liga_g = modele.get(kod)
@@ -2239,6 +2328,7 @@ def uruchom(a, otworz=True):
                      "kartki": round(pr["kartki"], 1) if pr.get("kartki") else None,
                      "rozne": round(pr["rozne"], 1) if pr.get("rozne") else None,
                      "sedzia": f'{pr["sedzia"][0]} (kartki x{pr["sedzia"][1]:.2f})' if pr.get("sedzia") else None,
+                     "z_kursow": bool(pr.get("z_kursow")),
                      "wyniki": [f"{s} ({p*100:.0f}%)" for p, s in wyniki],
                      "h2h": [f'{x["HomeTeam"].strip()} {int(num(x,"FTHG"))}:{int(num(x,"FTAG"))} {x["AwayTeam"].strip()}'
                              for x in h2h_m[:5]],
@@ -2317,6 +2407,11 @@ def uruchom(a, otworz=True):
             x.pop("spec", None)
     if a.html:
         zapisz_rozliczenie(historia, os.path.join(os.path.dirname(a.html) or ".", "rozliczenie.html"))
+        try:   # kopia bazy na stronie (zapas, gdyby pamięć GitHuba się wyczyściła)
+            with open(os.path.join(os.path.dirname(a.html) or ".", "historia.json"), "w", encoding="utf-8") as f:
+                json.dump(historia, f, ensure_ascii=False)
+        except Exception:
+            pass
     if af:
         print(f"\nAPI-Football: użyto {af.uzyte} zapytań w tym uruchomieniu")
     if a.html:
