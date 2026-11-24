@@ -26,6 +26,7 @@ Jak liczy:
 To statystyka, nie pewniak: kontuzje, składy i motywacja nie są w modelu.
 """
 import argparse
+import json
 import csv
 import os
 import io
@@ -46,7 +47,11 @@ LIGI_DLA_PUCHAROW = ["E0", "E1", "SP1", "I1", "D1", "F1", "N1", "P1", "B1", "T1"
 # przybliżona siła lig (do meczów pucharowych między ligami)
 SILA = {"E0": 1.0, "SP1": 0.93, "I1": 0.92, "D1": 0.92, "F1": 0.88, "P1": 0.80, "N1": 0.80,
         "E1": 0.74, "B1": 0.76, "T1": 0.76, "SC0": 0.68, "G1": 0.70, "ARG": 0.72, "BRA": 0.76}
-SILA_POTEGA = 2.0   # jak mocno różnica siły lig wpływa na gole w pucharach
+SILA_POTEGA = 2.0
+# Ustawienia modelu (nadpisywane parametrami). "stary" model = bez ulepszeń, do porównania w backteście.
+MODEL = {"polowa": 120, "rho": -0.08, "waga_modelu": 0.5, "sedzia": True, "kalibracja": True}
+MODEL_STARY = {"polowa": None, "rho": 0.0, "waga_modelu": 1.0, "sedzia": False, "kalibracja": False}
+KALIBRACJA = {}   # kategoria rynku -> [(średnia prognoza, faktycznie weszło), ...]   # jak mocno różnica siły lig wpływa na gole w pucharach
 NAZWY = {"E0": "Premier League", "E1": "Championship", "SP1": "LaLiga", "I1": "Serie A",
          "D1": "Bundesliga", "F1": "Ligue 1", "N1": "Eredivisie", "P1": "Portugalia",
          "T1": "Turcja", "B1": "Belgia", "SC0": "Szkocja", "G1": "Grecja",
@@ -218,10 +223,11 @@ def znajdz(nazwa, indeks):
 
 # ---------- statystyki ----------
 class Liga:
-    def __init__(self, mecze_wagi):
-        # mecze_wagi: lista (wiersz, waga)
+    def __init__(self, mecze_wagi, ref=None, polowa=None):
+        # mecze_wagi: lista (wiersz, waga); ref+polowa: starsze mecze ważą mniej (waga /2 co `polowa` dni)
         self.dom, self.wyj = {}, {}  # druzyna -> dict sum
         self.suma = {"w": 0}
+        self.sedz = {}       # sędzia -> [suma kartek, waga]
         self.wszystkie = []  # do H2H
         for w, waga in mecze_wagi:
             fthg, ftag = num(w, "FTHG"), num(w, "FTAG")
@@ -231,10 +237,18 @@ class Liga:
             self.wszystkie.append(w)
             if waga <= 0:
                 continue
+            if polowa and ref:
+                wiek = max(0, (ref - data_meczu(w)).days)
+                waga *= 0.5 ** (wiek / polowa)
             kart_h = sum(x for x in (num(w, "HY"), num(w, "HR")) if x is not None)
             kart_a = sum(x for x in (num(w, "AY"), num(w, "AR")) if x is not None)
             ma_kartki = num(w, "HY") is not None
             hc, ac = num(w, "HC"), num(w, "AC")
+            sedzia = (w.get("Referee") or "").strip()
+            if sedzia and ma_kartki:
+                sd = self.sedz.setdefault(sedzia, [0.0, 0.0])
+                sd[0] += (kart_h + kart_a) * waga
+                sd[1] += waga
             rek = {"gz_h": fthg, "gs_h": ftag, "k_h": kart_h if ma_kartki else None,
                    "k_a": kart_a if ma_kartki else None, "r_h": hc, "r_a": ac,
                    "s_h": num(w, "HS"), "s_a": num(w, "AS"), "c_h": num(w, "HST"), "c_a": num(w, "AST"),
@@ -242,6 +256,7 @@ class Liga:
             for slownik, druz in ((self.dom, h), (self.wyj, a)):
                 s = slownik.setdefault(druz, {})
                 s["w"] = s.get("w", 0) + waga
+                s["mecze"] = s.get("mecze", 0) + 1
                 for k, v in rek.items():
                     if k == "ma_k" or v is None:
                         continue
@@ -263,13 +278,13 @@ class Liga:
         n = s.get("n_" + k, 0) if s else 0
         return s[k] / n if n else None
 
-    def prognoza(self, h, a, liga_g=None, sila_h=1.0, sila_g=1.0):
+    def prognoza(self, h, a, liga_g=None, sila_h=1.0, sila_g=1.0, sedzia=None):
         """liga_g: liga gościa (mecze pucharowe); sila_*: siła lig."""
         if liga_g is self:
             liga_g = None          # puchar, ale obie drużyny z tej samej ligi -> zwykły model + H2H
         lg = liga_g or self
         sh, sa = self.dom.get(h), lg.wyj.get(a)
-        if not sh or not sa or sh["w"] < 3 or sa["w"] < 3:
+        if not sh or not sa or sh.get("mecze", 0) < 3 or sa.get("mecze", 0) < 3:
             return None
         L1h, L1a = self.sr_ligi("gz_h"), self.sr_ligi("gs_h")
         L2h, L2a = lg.sr_ligi("gz_h"), lg.sr_ligi("gs_h")
@@ -300,6 +315,15 @@ class Liga:
         wynik["celne_h"], wynik["celne_a"] = ocz("c_h", "c_a")
         wynik["kartki"] = wynik["kartki_h"] + wynik["kartki_a"] if wynik["kartki_h"] is not None else None
         wynik["rozne"] = wynik["rozne_h"] + wynik["rozne_a"] if wynik["rozne_h"] is not None else None
+        if sedzia and MODEL["sedzia"] and sedzia in self.sedz and wynik["kartki"]:
+            s_k, n_k = self.sedz[sedzia]
+            Lk = (self.sr_ligi("k_h") or 0) + (self.sr_ligi("k_a") or 0)
+            if Lk:
+                f = min(1.5, max(0.67, ((s_k + Lk * 5) / (n_k + 5)) / Lk))
+                for k in ("kartki_h", "kartki_a"):
+                    wynik[k] *= f
+                wynik["kartki"] *= f
+                wynik["sedzia"] = (sedzia, f)
         if liga_g:
             wynik["h2h"] = []
             return wynik
@@ -357,6 +381,14 @@ def typy(pr):
     lh, la = pr["lam_h"], pr["lam_a"]
     M = 10
     macierz = [[pois(i, lh) * pois(j, la) for j in range(M)] for i in range(M)]
+    rho = MODEL["rho"]
+    if rho:   # poprawka Dixona-Colesa: 0:0, 1:0, 0:1, 1:1 (prosty Poisson zaniża remisy)
+        macierz[0][0] *= 1 - lh * la * rho
+        macierz[0][1] *= 1 + lh * rho
+        macierz[1][0] *= 1 + la * rho
+        macierz[1][1] *= 1 - rho
+        suma = sum(map(sum, macierz))
+        macierz = [[v / suma for v in r] for r in macierz]
     p1 = sum(macierz[i][j] for i in range(M) for j in range(M) if i > j)
     px = sum(macierz[i][i] for i in range(M))
     p2 = 1 - p1 - px
@@ -464,6 +496,103 @@ def ostatnie_mecze(liga, druzyna, n):
     m = [w for w in liga.wszystkie if druzyna in (w["HomeTeam"].strip(), w["AwayTeam"].strip())]
     m.sort(key=data_meczu, reverse=True)
     return m[:n]
+
+
+def rynek_kat(spec):
+    co = spec[1] if spec[0] == "dr" else spec[0]
+    return {"res": "wynik", "btts": "bramki", "gole": "bramki", "rozne": "rozne", "kartki": "kartki",
+            "strzaly": "strzaly", "celne": "strzaly"}.get(co, "inne")
+
+
+_PMF = {}
+
+
+def _pmf(lam):
+    k = round(lam, 2)
+    if k not in _PMF:
+        _PMF[k] = [pois(i, k) for i in range(11)]
+    return _PMF[k]
+
+
+def lambdy_rynku(kursy):
+    """Gole oczekiwane, które najlepiej pasują do kursów bukmacherów (1X2 + gole 2.5, bez marży)."""
+    if not all(k in kursy for k in "HDA"):
+        return None
+    inv = [1 / kursy[k][0] for k in "HDA"]
+    cel = [x / sum(inv) for x in inv]
+    cel_o = None
+    if ">2.5" in kursy and "<2.5" in kursy:
+        o, u = 1 / kursy[">2.5"][0], 1 / kursy["<2.5"][0]
+        cel_o = o / (o + u)
+
+    def blad(lh, la):
+        ph, pa = _pmf(lh), _pmf(la)
+        cum, c = [], 0.0
+        for x in pa:
+            c += x
+            cum.append(c)
+        p1 = sum(ph[i] * cum[i - 1] for i in range(1, 11))
+        px = sum(ph[i] * pa[i] for i in range(11))
+        e = (p1 - cel[0]) ** 2 + (px - cel[1]) ** 2 + (1 - p1 - px - cel[2]) ** 2
+        if cel_o is not None:
+            t = lh + la
+            e += (1 - math.exp(-t) * (1 + t + t * t / 2) - cel_o) ** 2
+        return e
+    best = min(((blad(x / 10, y / 10), x / 10, y / 10) for x in range(2, 39) for y in range(2, 39)))
+    _, bx, by = best
+    best = min(((blad(bx + i / 50, by + j / 50), bx + i / 50, by + j / 50)
+                for i in range(-5, 6) for j in range(-5, 6) if bx + i / 50 > 0.05 and by + j / 50 > 0.05))
+    return best[1], best[2]
+
+
+def mieszaj_z_rynkiem(pr, kursy):
+    """Łączy gole oczekiwane modelu z tymi, które wynikają z kursów (rynek wie o składach/kontuzjach)."""
+    w = MODEL["waga_modelu"]
+    if w >= 1 or not kursy:
+        return
+    m = lambdy_rynku(kursy)
+    if not m:
+        return
+    pr["lam_model"] = (pr["lam_h"], pr["lam_a"])
+    pr["lam_h"] = w * pr["lam_h"] + (1 - w) * m[0]
+    pr["lam_a"] = w * pr["lam_a"] + (1 - w) * m[1]
+
+
+def kalibruj(p, rk):
+    """Poprawia prawdopodobieństwo według tego, jak takie typy wchodziły w backteście."""
+    if not MODEL["kalibracja"]:
+        return p
+    pkt = KALIBRACJA.get(rk) or KALIBRACJA.get("wszystkie")
+    if not pkt:
+        return p
+    if p <= pkt[0][0]:
+        return min(0.99, max(0.01, p + (pkt[0][1] - pkt[0][0])))
+    if p >= pkt[-1][0]:
+        return min(0.99, max(0.01, p + (pkt[-1][1] - pkt[-1][0])))
+    for (x1, y1), (x2, y2) in zip(pkt, pkt[1:]):
+        if x1 <= p <= x2:
+            return min(0.99, max(0.01, y1 + (y2 - y1) * (p - x1) / ((x2 - x1) or 1)))
+    return p
+
+
+def licz_kalibracje(pary):
+    """pary: (kategoria, prognoza, wszedł). Zwraca słownik punktów kalibracji (wygładzonych)."""
+    wynik = {}
+    for kat in {k for k, _, _ in pary} | {"wszystkie"}:
+        xs = [(p, t) for k, p, t in pary if kat == "wszystkie" or k == kat]
+        if len(xs) < 60:
+            continue
+        pkt = []
+        for od in range(0, 100, 10):
+            b = [(p, t) for p, t in xs if od / 100 <= p < (od + 10) / 100]
+            if len(b) < 15:
+                continue
+            sr = sum(p for p, _ in b) / len(b)
+            fakt = sum(t for _, t in b) / len(b)
+            pkt.append((sr, (fakt * len(b) + sr * 30) / (len(b) + 30)))   # wygładzenie małych próbek
+        if len(pkt) >= 2:
+            wynik[kat] = pkt
+    return wynik
 
 
 def kursy_z_terminarza(w):
@@ -766,6 +895,225 @@ def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=10):
     return typy_zaw[:12]
 
 
+# ---------- BACKTEST ----------
+def backtest(a, surowe, sciezka_html):
+    """Prognozy dla N ostatnich rozegranych meczów, liczone tylko z danych sprzed meczu.
+    Porównuje stary model (bez ulepszeń) z nowym."""
+    stawka, podatek = 100.0, 0.88
+    kandydaci = []
+    for kod, mecze in surowe.items():
+        if kod in PUCHARY:
+            continue
+        for w, waga in mecze:
+            if waga >= 1.0 and num(w, "FTHG") is not None and num(w, "FTAG") is not None:
+                kandydaci.append((data_meczu(w), kod, w))
+    kandydaci.sort(key=lambda x: x[0], reverse=True)
+
+    def symuluj(cfg, limit, tylko=None):
+        zapas = dict(MODEL)
+        MODEL.update(cfg)
+        MODEL["kalibracja"] = False            # w backteście nigdy nie podglądamy przyszłości
+        wyniki, cache_lig = [], {}
+        try:
+            for d, kod, w in kandydaci:
+                if len(wyniki) >= limit:
+                    break
+                if tylko is not None and (kod, d, w["HomeTeam"].strip()) not in tylko:
+                    continue
+                klucz = (kod, d.date())
+                if klucz not in cache_lig:
+                    cache_lig[klucz] = Liga([(x, wg) for x, wg in surowe[kod] if data_meczu(x) < d],
+                                            d, MODEL["polowa"])
+                h, g = w["HomeTeam"].strip(), w["AwayTeam"].strip()
+                pr = cache_lig[klucz].prognoza(h, g, sedzia=(w.get("Referee") or "").strip() or None)
+                if not pr:
+                    continue
+                kursy = {k: (v, "") for k, v in kursy_z_terminarza(w).items() if v}
+                mieszaj_z_rynkiem(pr, kursy)
+                t, _ = typy(pr)
+                typy_m = []
+                for nazwa, p, kl, spec in t:
+                    traf = trafia(w, h, spec)
+                    if traf is None:
+                        continue
+                    nazwa = nazwa.replace("Gospodarz:", f"{h}:", 1).replace("Gość:", f"{g}:", 1)
+                    typy_m.append({"typ": nazwa, "p": p, "rk": rynek_kat(spec),
+                                   "kurs": kursy[kl][0] if kl and kl in kursy else None, "traf": traf})
+                wyniki.append({"data": d, "kod": kod, "liga": NAZWY.get(kod, kod), "h": h, "g": g,
+                               "wynik": f'{int(num(w, "FTHG"))}:{int(num(w, "FTAG"))}', "typy": typy_m})
+        finally:
+            MODEL.clear()
+            MODEL.update(zapas)
+        wyniki.sort(key=lambda x: x["data"])
+        return wyniki
+
+    mn, mx = a.min_proc / 100, a.max_proc / 100
+
+    def rozlicz(zaklady):
+        n = len(zaklady)
+        tr = sum(1 for _, ok in zaklady if ok)
+        zwrot = sum(stawka * k for k, ok in zaklady if ok)
+        zwrot_pod = sum(stawka * podatek * k for k, ok in zaklady if ok)
+        bil, krzywa = 0.0, []
+        for k, ok in zaklady:
+            bil += (stawka * podatek * k if ok else 0) - stawka
+            krzywa.append(round(bil, 2))
+        return {"n": n, "traf": tr, "proc": tr / n * 100 if n else 0, "postawiono": n * stawka,
+                "zwrot": zwrot, "zysk": zwrot - n * stawka, "zysk_pod": zwrot_pod - n * stawka,
+                "roi": (zwrot - n * stawka) / (n * stawka) * 100 if n else 0,
+                "sr_kurs": sum(k for k, _ in zaklady) / n if n else 0, "krzywa": krzywa}
+
+    def ocen(wyniki):
+        pojedyncze, wybrane, value, kupony, ogolem = [], [], [], [], []
+        for m in wyniki:
+            kand = [x for x in m["typy"] if x["kurs"] and mn <= x["p"] <= mx]
+            if kand:
+                x = max(kand, key=lambda x: x["p"])
+                pojedyncze.append((x["kurs"], x["traf"]))
+                wybrane.append((m, x))
+            for x in m["typy"]:
+                if x["kurs"] and a.value_prog < x["p"] * x["kurs"] <= 1.4:
+                    value.append((x["kurs"], x["traf"]))
+            kand = [x for x in m["typy"] if mn <= x["p"] <= mx]
+            if kand:
+                ogolem.append(max(kand, key=lambda x: x["p"]))
+        for i in range(0, len(wybrane) - 1, 2):
+            (_, x1), (_, x2) = wybrane[i], wybrane[i + 1]
+            kupony.append((x1["kurs"] * x2["kurs"], x1["traf"] and x2["traf"]))
+        wsz = [x for m in wyniki for x in m["typy"]]
+        w12 = [x for x in wsz if x["rk"] == "wynik" and x["typ"][:1] in "1X2" and len(x["typ"].split()[0]) == 1]
+        brier = lambda xs: sum((x["p"] - x["traf"]) ** 2 for x in xs) / len(xs) if xs else 0
+        return {"strategie": [("Najpewniejszy typ z kursem (1 mecz = 1 kupon)", rozlicz(pojedyncze)),
+                              ("Value bety (pojedynczo)", rozlicz(value)),
+                              ("Kupony po 2 zdarzenia", rozlicz(kupony))],
+                "wybrane": wybrane, "ogolem": ogolem, "brier": brier(wsz), "brier12": brier(w12),
+                "pary": [(x["rk"], x["p"], x["traf"]) for x in wsz]}
+
+    nowe = symuluj(MODEL, a.backtest)
+    if not nowe:
+        print("Backtest: brak meczów do sprawdzenia.")
+        return None
+    stare = symuluj(MODEL_STARY, a.backtest, {(m["kod"], m["data"], m["h"]) for m in nowe})
+    on, os_ = ocen(nowe), ocen(stare)
+
+    # kalibracja: uczymy się na starszej połowie, sprawdzamy na nowszej (uczciwie)
+    pol = len(nowe) // 2
+    pary_stare = [(x["rk"], x["p"], x["traf"]) for m in nowe[:pol] for x in m["typy"]]
+    pary_nowe = [(x["rk"], x["p"], x["traf"]) for m in nowe[pol:] for x in m["typy"]]
+    kal_test = licz_kalibracje(pary_stare)
+    zapas_k = dict(KALIBRACJA)
+    KALIBRACJA.clear()
+    KALIBRACJA.update(kal_test)
+    zapas_m = MODEL["kalibracja"]
+    MODEL["kalibracja"] = True
+    b_przed = sum((p - t) ** 2 for _, p, t in pary_nowe) / max(1, len(pary_nowe))
+    b_po = sum((kalibruj(p, k) - t) ** 2 for k, p, t in pary_nowe) / max(1, len(pary_nowe)) if kal_test else b_przed
+    MODEL["kalibracja"] = zapas_m
+    # docelowa kalibracja do dzisiejszych prognoz: ze wszystkich meczów backtestu
+    KALIBRACJA.clear()
+    kal_wlaczona = bool(kal_test) and b_po < b_przed
+    if kal_wlaczona:          # używamy kalibracji tylko, jeśli naprawdę pomaga
+        KALIBRACJA.update(licz_kalibracje(on["pary"]))
+    try:
+        with open(os.path.join(os.path.dirname(sciezka_html) or ".", "kalibracja.json"), "w", encoding="utf-8") as f:
+            json.dump(KALIBRACJA, f)
+    except Exception:
+        pass
+
+    od, do = nowe[0]["data"].strftime("%d.%m.%Y"), nowe[-1]["data"].strftime("%d.%m.%Y")
+    print(f"\n===== BACKTEST: {len(nowe)} meczów ({od} - {do}), stawka 100 zł =====")
+    print(f"Błąd prognoz (Brier, im mniej tym lepiej): stary {os_['brier']:.4f} -> nowy {on['brier']:.4f}")
+    for (nazwa, s), (_, s0) in zip(on["strategie"], os_["strategie"]):
+        print(f"{nazwa}: {s['n']} kuponów, wygrane {s['proc']:.1f}%, z podatkiem {s['zysk_pod']:+.0f} zł "
+              f"(stary model: {s0['proc']:.1f}%, {s0['zysk_pod']:+.0f} zł)")
+    print(f"Kalibracja na nowszej połowie: błąd {b_przed:.4f} -> {b_po:.4f}"
+          + (" (włączona)" if b_po < b_przed and kal_test else " (wyłączona - nie pomaga)"))
+
+    # ---- raport HTML ----
+    def wykres(kr):
+        if len(kr) < 2:
+            return ""
+        lo, hi = min(kr + [0]), max(kr + [0])
+        rng = (hi - lo) or 1
+        W, H = 600, 140
+        pts = " ".join(f"{i / (len(kr) - 1) * W:.1f},{H - (v - lo) / rng * H:.1f}" for i, v in enumerate(kr))
+        y0 = H - (0 - lo) / rng * H
+        kol = "#00b050" if kr[-1] >= 0 else "#e0533d"
+        return (f'<svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" style="width:100%;height:140px"><line x1="0" x2="{W}" '
+                f'y1="{y0:.1f}" y2="{y0:.1f}" stroke="#888" stroke-dasharray="4 4"/><polyline fill="none" stroke="{kol}" '
+                f'stroke-width="2" vector-effect="non-scaling-stroke" points="{pts}"/></svg>')
+
+    def lepiej(nowa, stara, mniej_lepiej=False):
+        ok = nowa < stara if mniej_lepiej else nowa > stara
+        return "#00b050" if ok else "#e0533d" if nowa != stara else "inherit"
+    por = f"""<tr><td>Błąd prognoz (Brier) &mdash; wszystkie typy</td><td>{os_['brier']:.4f}</td>
+<td style="color:{lepiej(on['brier'], os_['brier'], True)}"><b>{on['brier']:.4f}</b></td></tr>
+<tr><td>Błąd prognoz (Brier) &mdash; 1X2</td><td>{os_['brier12']:.4f}</td>
+<td style="color:{lepiej(on['brier12'], os_['brier12'], True)}"><b>{on['brier12']:.4f}</b></td></tr>"""
+    for (nazwa, s), (_, s0) in zip(on["strategie"], os_["strategie"]):
+        por += (f"<tr><td>{nazwa}: wygrane</td><td>{s0['proc']:.1f}% ({s0['n']})</td>"
+                f"<td style='color:{lepiej(s['proc'], s0['proc'])}'><b>{s['proc']:.1f}% ({s['n']})</b></td></tr>"
+                f"<tr><td>{nazwa}: wynik z podatkiem</td><td>{s0['zysk_pod']:+.0f} zł</td>"
+                f"<td style='color:{lepiej(s['zysk_pod'], s0['zysk_pod'])}'><b>{s['zysk_pod']:+.0f} zł</b></td></tr>")
+    karty = ""
+    for nazwa, s in on["strategie"]:
+        kol = "#00b050" if s["zysk_pod"] >= 0 else "#e0533d"
+        karty += f"""<div class="k"><h3>{nazwa}</h3><div class="g">
+<span>Kuponów</span><b>{s['n']}</b><span>Wygrane</span><b>{s['traf']} ({s['proc']:.1f}%)</b>
+<span>Średni kurs</span><b>{s['sr_kurs']:.2f}</b><span>Postawiono</span><b>{s['postawiono']:.0f} zł</b>
+<span>Wypłaty</span><b>{s['zwrot']:.0f} zł</b><span>Wynik bez podatku</span><b>{s['zysk']:+.0f} zł (ROI {s['roi']:+.1f}%)</b>
+<span>Wynik z podatkiem 12%</span><b style="color:{kol}">{s['zysk_pod']:+.0f} zł</b></div>
+<p class="m">Bilans z podatkiem, kupon po kuponie:</p>{wykres(s['krzywa'])}</div>"""
+    kal_rows = ""
+    for od_ in range(50, 100, 10):
+        xs = [(p, t) for _, p, t in on["pary"] if od_ / 100 <= p < (od_ + 10) / 100]
+        if xs:
+            kal_rows += (f"<tr><td>{od_}-{od_ + 10}%</td><td>{len(xs)}</td><td>{sum(p for p, _ in xs) / len(xs) * 100:.1f}%</td>"
+                         f"<td><b>{sum(t for _, t in xs) / len(xs) * 100:.1f}%</b></td></tr>")
+    wiersze_typ = "".join(
+        f"<tr><td>{m['data'].strftime('%d.%m')}</td><td>{m['h']} &ndash; {m['g']} <span class='m'>{m['liga']}</span></td>"
+        f"<td>{m['wynik']}</td><td>{x['typ']}</td><td>{x['p'] * 100:.0f}%</td><td>{x['kurs']:.2f}</td>"
+        f"<td>{'&#x2705;' if x['traf'] else '&#x274C;'}</td></tr>" for m, x in reversed(on["wybrane"]))
+    og = on["ogolem"]
+    og_txt = f"{sum(x['traf'] for x in og)}/{len(og)} ({sum(x['traf'] for x in og) / len(og) * 100:.1f}%)" if og else "-"
+    zm_kal = (b_przed - b_po) / b_przed * 100 if b_przed else 0
+    html = f"""<!DOCTYPE html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Backtest</title><style>
+:root{{--bg:#f4f6f9;--card:#fff;--txt:#1d2330;--mut:#6b7385;--lin:#e3e7ee}}
+@media(prefers-color-scheme:dark){{:root{{--bg:#12151b;--card:#1b2029;--txt:#e8ebf1;--mut:#97a0b3;--lin:#2b313d}}}}
+body{{margin:0;font:14px/1.45 system-ui,Segoe UI,Arial;background:var(--bg);color:var(--txt)}}main{{max-width:1000px;margin:0 auto;padding:16px}}
+.k{{background:var(--card);border:1px solid var(--lin);border-radius:12px;padding:14px 16px;margin-bottom:16px}}
+.k h3{{margin:0 0 8px;font-size:16px}}.g{{display:grid;grid-template-columns:1fr auto;gap:4px 16px;max-width:460px}}.g b{{text-align:right}}
+.m{{color:var(--mut);font-size:12px}}table{{width:100%;border-collapse:collapse}}td,th{{padding:6px 8px;border-bottom:1px solid var(--lin);text-align:left}}
+th{{font-size:11px;color:var(--mut);text-transform:uppercase}}a{{color:#4a7bd0}}</style></head><body><main>
+<p><a href="index.html">&larr; Wróć do prognoz</a></p>
+<h1 style="font-size:20px">Backtest: {len(nowe)} meczów ({od} &ndash; {do})</h1>
+<p class="m">Każda prognoza policzona tylko z danych sprzed meczu. Stawka 100 zł na kupon. Kursy: średnie kursy rynku z football-data
+(tylko 1X2 i gole 2.5). Próg prawdopodobieństwa {a.min_proc:.0f}&ndash;{a.max_proc:.0f}%. Wygenerowano {datetime.now():%d.%m.%Y %H:%M}.</p>
+<div class="k"><h3>Stary model vs nowy model</h3>
+<p class="m">Nowy = mieszanie z kursami rynku (waga modelu {MODEL['waga_modelu']:.0%}), świeższe mecze ważniejsze
+(połowa wagi po {MODEL['polowa'] or '-'} dniach), poprawka na remisy (rho {MODEL['rho']}), sędzia przy kartkach.
+Zielone = nowy lepszy.</p>
+<table><tr><th></th><th>Stary</th><th>Nowy</th></tr>{por}</table>
+<p class="m">Błąd prognoz (Brier) to najuczciwsza miara: im mniejszy, tym trafniejsze procenty. Wynik w zł na 200 meczach
+w dużej mierze zależy od szczęścia.</p></div>
+<div class="k"><h3>Kalibracja procentów</h3>
+<p>Sprawdzona uczciwie: nauczona na starszej połowie meczów, sprawdzona na nowszej. Błąd: {b_przed:.4f} &rarr; <b>{b_po:.4f}</b>
+({'poprawa' if zm_kal > 0 else 'pogorszenie'} o {abs(zm_kal):.1f}%).</p>
+<p class="m">{'Kalibracja pomaga, więc dzisiejsze prognozy na stronie są nią poprawione.' if kal_wlaczona else
+  'Kalibracja nie pomogła, więc jest wyłączona: procenty na stronie pochodzą prosto z modelu.'}</p>
+<table><tr><th>Przedział</th><th>Typów</th><th>Model mówił średnio</th><th>Weszło naprawdę</th></tr>{kal_rows}</table></div>
+<h2 style="font-size:17px">Nowy model &mdash; szczegóły</h2>
+{karty}
+<div class="k"><h3>Najpewniejszy typ meczu ogółem (też rożne, kartki, strzały)</h3><p>Trafione: <b>{og_txt}</b> <span class="m">(bez kursów, więc bez wyniku w zł)</span></p></div>
+<div class="k"><h3>Typy z pierwszej strategii</h3><div style="overflow-x:auto"><table><tr><th>Data</th><th>Mecz</th><th>Wynik</th><th>Typ</th><th>Szansa</th><th>Kurs</th><th></th></tr>{wiersze_typ}</table></div></div>
+</main></body></html>"""
+    with open(sciezka_html, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"Zapisano raport backtestu: {sciezka_html}")
+    return sciezka_html
+
+
 # ---------- strona HTML ----------
 STRONA = """<!DOCTYPE html>
 <html lang="pl"><head><meta charset="utf-8">
@@ -814,7 +1162,7 @@ th{font-size:11px;text-transform:uppercase;color:var(--mut);font-weight:600}
 #vb{background:var(--card);border:1px solid var(--lin);border-radius:12px;margin-bottom:16px;padding:0 16px}
 #vb summary{padding:14px 0;font-weight:700;font-size:15px;cursor:pointer}.plus{color:#00b050;font-weight:700}.gk li{margin:3px 0}.gk .mm{color:var(--mut);font-size:11px}.knot{font-size:11px;color:var(--mut);margin-top:8px}
 </style></head><body>
-<header><h1>Prognozy &middot; wygenerowano __DATA__</h1>
+<header><h1>Prognozy &middot; wygenerowano __DATA__ __BT__</h1>
 <div class="filtry">
 <label>Min. prawd. <input type="range" id="min" min="50" max="95" value="60"> <b id="minv">60</b>%</label>
 <label>Min. forma <input type="range" id="minf" min="0" max="100" step="10" value="0"> <b id="minfv">0</b>%</label>
@@ -831,7 +1179,7 @@ th{font-size:11px;text-transform:uppercase;color:var(--mut);font-weight:600}
 <option value="druz">statystyki drużyn</option><option value="gosp">tylko gospodarz</option><option value="gosc">tylko gość</option><option value="zaw">zawodnicy</option></select></label>
 <label><input type="checkbox" id="razem"> wszystkie typy w jednej liście</label>
 <input type="search" id="szukaj" placeholder="Szukaj drużyny lub ligi">
-<button id="odsw" style="display:none;padding:6px 12px;border:0;border-radius:8px;background:#305496;color:#fff;font-weight:600;cursor:pointer">&#x21bb; Odśwież dane</button>
+
 </div>
 <div class="chipy" id="chipy">
 <button class="chip on" data-rk="">Wszystkie</button><button class="chip" data-rk="wynik">&#x1F3C6; Wynik</button>
@@ -844,6 +1192,9 @@ th{font-size:11px;text-transform:uppercase;color:var(--mut);font-weight:600}
 <div class="kform"><label><input type="checkbox" id="vpod"> uwzględnij podatek 12%</label>
 <label>min. przewaga <input type="number" id="vmin" value="5" min="0" max="100" style="width:60px">%</label>
 <label>min. szansa <input type="number" id="vpmin" value="30" min="1" max="99" style="width:60px">%</label>
+<label>Sortuj <select id="vsort"><option value="ev">przewaga</option>
+<option value="kd">kurs: od najwyższego</option><option value="kr">kurs: od najniższego</option>
+<option value="p">szansa</option><option value="t">data meczu</option></select></label>
 <label>maks. przewaga <input type="number" id="vmax" value="40" min="5" max="1000" style="width:60px">%</label></div>
 <div class="wrap" id="vlista"></div>
 <p class="knot">Value bet = kurs u bukmachera wyższy, niż wynika ze statystyk. Przewaga = szansa &times; kurs &minus; 1. Przy podatku 12% potrzeba ok. 14% przewagi, żeby wyjść na plus. Pojedynczy value bet i tak często przegrywa: zysk pojawia się dopiero przy wielu takich zakładach. Bardzo duża przewaga (np. +100%) to prawie zawsze błąd modelu, a nie okazja: bukmacher wie o składach, kontuzjach i formie więcej niż statystyka - dlatego domyślnie ukrywam przewagi powyżej 40%.</p></details>
@@ -965,13 +1316,15 @@ dni.querySelectorAll(".chip").forEach(b=>b.classList.toggle("on",b===c));rys()})
 chipy.addEventListener("click",e=>{const c=e.target.closest("[data-rk]");if(!c)return;RK=c.dataset.rk;
 chipy.querySelectorAll(".chip").forEach(b=>b.classList.toggle("on",b===c));rys()});
 function value(){const pod=vpod.checked?0.88:1,mn=(+vmin.value||0)/100,pm=+vpmin.value||0;
-const t=D.flatMap(m=>m.typy).filter(x=>x.rynek&&x.p>=pm&&pasujeKat(x)).map(x=>({x,ev:x.p/100*x.rynek*pod-1})).filter(z=>z.ev>=mn&&z.ev<=(+vmax.value||40)/100).sort((a,b)=>b.ev-a.ev);
+const t=D.flatMap(m=>m.typy).filter(x=>x.rynek&&x.p>=pm&&pasujeKat(x)).map(x=>({x,ev:x.p/100*x.rynek*pod-1})).filter(z=>z.ev>=mn&&z.ev<=(+vmax.value||40)/100);
+const VS={ev:(a,b)=>b.ev-a.ev,kd:(a,b)=>b.x.rynek-a.x.rynek,kr:(a,b)=>a.x.rynek-b.x.rynek,p:(a,b)=>b.x.p-a.x.p,t:(a,b)=>a.x.m.ts-b.x.m.ts};
+t.sort((a,b)=>VS[vsort.value](a,b)||b.ev-a.ev);
 vlista.innerHTML=t.length?`<table><tr><th></th><th>Mecz</th><th>Typ</th><th>Szansa</th><th>Uczciwy kurs</th><th>Kurs</th><th>Przewaga</th></tr>
 ${t.map(({x,ev})=>`<tr><td><button class="dod${K.has(x.id)?" on":""}" data-id="${x.id}">${K.has(x.id)?"&#10003;":"+"}</button></td>
 <td><b>${x.m.h} &ndash; ${x.m.g}</b><br><span class="mm">${x.m.liga} &middot; ${x.m.data} ${x.m.godz}</span></td><td>${x.typ}</td>
 <td><span class="p ${kl(x.p)}">${x.p}%</span></td><td>${x.kurs.toFixed(2)}</td><td><b>${x.rynek.toFixed(2)}</b>${x.buk?`<br><span class="mm">${x.buk}</span>`:""}</td>
 <td class="plus">+${(ev*100).toFixed(1)}%</td></tr>`).join("")}</table>`:'<p class="knot">Brak value betów przy tych ustawieniach. Kursy bukmacherów są tylko dla 1X2 i goli (więcej rynków z kluczem The Odds API).</p>'}
-for(const e of [vpod,vmin,vpmin,vmax])e.addEventListener("input",value);
+for(const e of [vpod,vmin,vpmin,vmax,vsort])e.addEventListener("input",value);
 function rys(){value();const mn=+min.value,mf=+minf.value/100,v=val.checked,q=szukaj.value.toLowerCase();
 minv.textContent=mn;minfv.textContent=minf.value;let html="";
 const ok=x=>pasujeKat(x)&&x.p>=mn&&(!v||x.value)&&(!mf||[x.fh,x.fg].every(s=>s[1]&&s[0]/s[1]>=mf));
@@ -983,20 +1336,14 @@ const mecze=D.filter(pasuje).map(m=>({m,t:sortuj(m.typy.filter(ok))})).filter(z=
 if(sort.value!=="p")mecze.sort((a,b)=>KLUCZ[sort.value](a.t[0])-KLUCZ[sort.value](b.t[0]));
 for(const {m,t} of mecze){
 html+=`<div class="mecz"><div class="top"><span class="m">${m.liga} &middot; ${m.data} ${m.godz}</span><br><b>${m.h} &ndash; ${m.g}</b>
-<div class="info"><span>Oczekiwane gole: <b>${m.lh} : ${m.la}</b></span>${m.kartki?`<span>Kartki ~<b>${m.kartki}</b></span>`:""}${m.rozne?`<span>Rożne ~<b>${m.rozne}</b></span>`:""}
+<div class="info"><span>Oczekiwane gole: <b>${m.lh} : ${m.la}</b></span>${m.kartki?`<span>Kartki ~<b>${m.kartki}</b></span>`:""}${m.rozne?`<span>Rożne ~<b>${m.rozne}</b></span>`:""}${m.sedzia?`<span>Sędzia: <b>${m.sedzia}</b></span>`:""}
 <span>Najczęstsze wyniki: ${m.wyniki.join(", ")}</span></div>
 <div class="info"><span>H2H: ${m.h2h.length?m.h2h.join(" &middot; "):"brak meczów"}</span></div></div>
 <div class="wrap"><table><tr><th></th><th>Typ</th><th>Prawd.</th><th>Uczciwy kurs</th><th>Kurs rynku</th><th>Forma ${m.h}</th><th>Forma ${m.g}</th><th>H2H</th></tr>
 ${t.map(x=>`<tr>${wiersz(x)}</tr>`).join("")}
 </table></div></div>`}
 lista.innerHTML=html||'<p>Brak typów przy tych filtrach.</p>'}
-const ODSW=__ODSWIEZ__;
-if(ODSW){odsw.style.display="";odsw.onclick=()=>window.open(ODSW,"_blank");}
-else if(location.hostname==="localhost"||location.hostname==="127.0.0.1"){odsw.style.display="";
-odsw.onclick=async()=>{odsw.disabled=true;odsw.textContent="Pobieram dane... (do 1 min)";
-try{const r=await fetch("/odswiez",{method:"POST"});if(!r.ok)throw 0;location.reload()}
-catch(e){odsw.textContent="Błąd - sprawdź czarne okno";odsw.disabled=false}};
-setTimeout(()=>location.reload(),15*60*1000);}
+if(location.hostname==="localhost"||location.hostname==="127.0.0.1")setTimeout(()=>location.reload(),15*60*1000);
 for(const e of [min,minf,val,szukaj,sort,razem,kat])e.addEventListener("input",rys);wczytaj();rys();kupon();generuj();
 </script></body></html>"""
 
@@ -1008,7 +1355,9 @@ def zapisz_html(sciezka, mecze, n_forma, otworz=True, odswiez_url=""):
     strona = (STRONA.replace("__JSON__", json.dumps(mecze, ensure_ascii=False))
               .replace("__DATA__", datetime.now().strftime("%d.%m.%Y %H:%M"))
               .replace("__N__", str(n_forma))
-              .replace("__ODSWIEZ__", json.dumps(odswiez_url)))
+              .replace("__BT__", ' &middot; <a href="backtest.html" style="font-size:14px;color:#4a7bd0">&#x1F4CA; Backtest</a>'
+                       if os.path.exists(os.path.join(os.path.dirname(sciezka) or ".", "backtest.html")) else "")
+              )
     with open(sciezka, "w", encoding="utf-8") as f:
         f.write(strona)
     print(f"\nZapisano stronę: {sciezka}")
@@ -1185,10 +1534,22 @@ def main():
     ap.add_argument("--zaw-max", type=int, default=12, help="dla ilu meczów liczyć zawodników (limit 100 zapytań/dzień)")
     ap.add_argument("--value-prog", type=float, default=1.05, help="value bet gdy szansa x kurs > próg")
     ap.add_argument("--cache", default="cache_api.json", help="plik pamięci podręcznej API")
+    ap.add_argument("--backtest", type=int, default=0, help="sprawdź model na N ostatnich rozegranych meczach")
+    ap.add_argument("--waga-modelu", type=float, default=0.5,
+                    help="0-1: ile model, a ile kursy rynku przy golach (1 = tylko model)")
+    ap.add_argument("--polowa", type=float, default=120, help="po ilu dniach mecz waży o połowę mniej (0 = wyłącz)")
+    ap.add_argument("--rho", type=float, default=-0.08, help="poprawka na remisy/niskie wyniki (0 = wyłącz)")
+    ap.add_argument("--bez-sedziego", action="store_true", help="nie uwzględniaj sędziego przy kartkach")
+    ap.add_argument("--bez-kalibracji", action="store_true", help="nie poprawiaj procentów wynikami backtestu")
+    ap.add_argument("--stary-model", action="store_true", help="model bez ulepszeń (do porównań)")
     ap.add_argument("--forma", type=int, default=10, help="ile ostatnich meczów do statystyk formy")
     ap.add_argument("--mecz", nargs=3, metavar=("LIGA", "GOSPODARZ", "GOŚĆ"))
     ap.add_argument("--dane", help="folder z lokalnymi plikami CSV (test/offline)")
     a = ap.parse_args()
+    MODEL.update({"polowa": a.polowa or None, "rho": a.rho, "waga_modelu": a.waga_modelu,
+                  "sedzia": not a.bez_sedziego, "kalibracja": not a.bez_kalibracji})
+    if a.stary_model:
+        MODEL.update(MODEL_STARY)
     if a.serwer:
         serwer(a)
         return
@@ -1224,7 +1585,7 @@ def uruchom(a, otworz=True):
         t = laduj_tekst(url, lok)
         return list(csv.DictReader(io.StringIO(t))) if t else []
 
-    modele = {}
+    modele, surowe = {}, {}
     dzis = date.today()
     for kod in ligi_dane:
         mecze = []
@@ -1248,8 +1609,23 @@ def uruchom(a, otworz=True):
                     mecze += [(w, waga) for w in wiersze]
                 except Exception as e:
                     print(f"  {kod} {sez}: nie pobrano ({e})")
-        modele[kod] = Liga(mecze)
+        modele[kod] = Liga(mecze, datetime.now(), MODEL["polowa"])
+        surowe[kod] = mecze
         print(f"  {NAZWY.get(kod, kod)}: {len(mecze)} meczów w bazie")
+
+    plik_kal = os.path.join(os.path.dirname(a.html or "") or ".", "kalibracja.json")
+    if not a.backtest and os.path.exists(plik_kal):
+        try:
+            with open(plik_kal, encoding="utf-8") as f:
+                KALIBRACJA.update({k: [tuple(x) for x in v] for k, v in json.load(f).items()})
+        except Exception:
+            pass
+    if a.backtest:
+        sciezka_bt = os.path.join(os.path.dirname(a.html or "") or ".", "backtest.html")
+        try:
+            backtest(a, surowe, sciezka_bt)
+        except Exception as e:
+            print(f"Backtest: błąd {e}")
 
     # indeks drużyn do pucharów: nazwa znormalizowana -> (kod ligi, nazwa w danych)
     indeks = {}
@@ -1353,11 +1729,10 @@ def uruchom(a, otworz=True):
         else:
             h, g = h_pokaz, g_pokaz
             liga_h = liga_g = modele.get(kod)
-            pr = liga_h.prognoza(h, g) if liga_h else None
+            pr = liga_h.prognoza(h, g, sedzia=(w.get("Referee") or "").strip() or None) if liga_h else None
         if not pr:
             print(f"\n{h_pokaz} - {g_pokaz}: za mało danych (sprawdź pisownię nazw drużyn)")
             continue
-        t, wyniki = typy(pr)
         kursy = {k: (v, "średnia rynku") for k, v in kursy_z_terminarza(w).items() if v}
         try:
             dzien = datetime.strptime(w.get("Date", ""), "%d/%m/%Y").date()
@@ -1366,6 +1741,8 @@ def uruchom(a, otworz=True):
         for k, v in dopasuj_kursy(kursy_api, kod, h_pokaz, g_pokaz, dzien).items():
             if k not in kursy or v[0] > kursy[k][0]:
                 kursy[k] = v
+        mieszaj_z_rynkiem(pr, kursy)
+        t, wyniki = typy(pr)
         forma_h = ostatnie_mecze(liga_h, h, a.forma)
         forma_g = ostatnie_mecze(liga_g, g, a.forma)
         h2h_m = pr.get("h2h", [])[:10]
@@ -1373,6 +1750,7 @@ def uruchom(a, otworz=True):
                      "h": h_pokaz, "g": g_pokaz, "lh": round(pr["lam_h"], 2), "la": round(pr["lam_a"], 2),
                      "kartki": round(pr["kartki"], 1) if pr.get("kartki") else None,
                      "rozne": round(pr["rozne"], 1) if pr.get("rozne") else None,
+                     "sedzia": f'{pr["sedzia"][0]} (kartki x{pr["sedzia"][1]:.2f})' if pr.get("sedzia") else None,
                      "wyniki": [f"{s} ({p*100:.0f}%)" for p, s in wyniki],
                      "h2h": [f'{x["HomeTeam"].strip()} {int(num(x,"FTHG"))}:{int(num(x,"FTAG"))} {x["AwayTeam"].strip()}'
                              for x in h2h_m[:5]],
@@ -1385,6 +1763,10 @@ def uruchom(a, otworz=True):
             info += f" | kartki ~{pr['kartki']:.1f}"
         if pr.get("rozne"):
             info += f" | rożne ~{pr['rozne']:.1f}"
+        if pr.get("sedzia"):
+            info += f" | sędzia {pr['sedzia'][0]} (kartki x{pr['sedzia'][1]:.2f})"
+        if pr.get("lam_model"):
+            info += f" | model sam: {pr['lam_model'][0]:.2f}:{pr['lam_model'][1]:.2f}"
         print(info)
         print(pr.get("h2h_txt", "   H2H: brak bezpośrednich meczów w ostatnich 5 sezonach"))
         print("   Najczęstsze wyniki: " + ", ".join(f"{s} ({p*100:.0f}%)" for p, s in wyniki))
@@ -1393,6 +1775,8 @@ def uruchom(a, otworz=True):
             kat = "gosp" if nazwa.startswith("Gospodarz:") else "gosc" if nazwa.startswith("Gość:") else "mecz"
             # typy drużynowe podpisane nazwą drużyny, np. "Arsenal: rożne powyżej 5.5"
             nazwa = nazwa.replace("Gospodarz:", f"{h_pokaz}:", 1).replace("Gość:", f"{g_pokaz}:", 1)
+            rk = rynek_kat(spec)
+            p = kalibruj(p, rk)
             proc = p * 100
             kurs_rynku, buk = kursy.get(klucz, (None, None)) if klucz else (None, None)
             jest_value = bool(kurs_rynku and p * kurs_rynku > a.value_prog)
@@ -1411,9 +1795,6 @@ def uruchom(a, otworz=True):
                                 nazwa, f"{proc:.1f}".replace(".", ","), f"{1/p:.2f}".replace(".", ","),
                                 f"{kurs_rynku:.2f}".replace(".", ",") if kurs_rynku else "",
                                 "TAK" if jest_value else "", txt(sh), txt(sg), txt(s2)])
-            co = spec[1] if spec[0] == "dr" else spec[0]
-            rk = {"res": "wynik", "btts": "bramki", "gole": "bramki", "rozne": "rozne", "kartki": "kartki",
-                  "strzaly": "strzaly", "celne": "strzaly"}.get(co, "inne")
             mecz_html["typy"].append({"kat": kat, "rk": rk, "typ": nazwa, "p": round(proc, 1), "kurs": round(1 / p, 2),
                                       "rynek": kurs_rynku, "buk": buk, "value": jest_value,
                                       "fh": list(sh), "fg": list(sg), "h2h": list(s2)})
