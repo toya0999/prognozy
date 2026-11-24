@@ -1555,6 +1555,27 @@ th{font-size:11px;text-transform:uppercase;color:var(--mut);font-weight:600}
 .st{display:inline-flex;align-items:center;gap:6px}.bar{width:46px;height:6px;border-radius:3px;background:var(--lin);overflow:hidden}
 .bar i{display:block;height:100%}.val{background:#ffd700;color:#000;font-weight:700;padding:1px 6px;border-radius:6px;font-size:11px}
 .leg{font-size:12px;color:var(--mut);margin:0 0 12px}.ukryj{display:none}
+@media(max-width:640px){.leg{display:none}}
+.c-br{display:none}.fsum{cursor:pointer;font-weight:600;font-size:13px;color:var(--mut);margin-bottom:6px;list-style:none}
+.fsum::-webkit-details-marker{display:none}
+@media(max-width:640px){
+header{position:static;padding:10px 12px}h1{font-size:16px;line-height:1.4}
+.filtry{gap:8px}.filtry label{flex:1 1 100%}.filtry input[type=range]{width:55%}.filtry select,.filtry input[type=search]{flex:1;min-width:0;max-width:100%}
+.chipy{flex-wrap:nowrap!important;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px;scrollbar-width:none}
+.chipy::-webkit-scrollbar{display:none}.chip{flex:0 0 auto;padding:6px 12px}
+main{padding:10px 8px}.top{padding:10px 12px}.top b{font-size:15px}
+.wrap{overflow:visible}.wrap table,.wrap tbody{display:block;width:100%}
+.wrap tr:has(th){display:none}
+.wrap tr{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:10px 12px;border-bottom:1px solid var(--lin)}
+.wrap td{border:0;padding:0;white-space:normal}
+.c-typ{flex:1 1 0;min-width:0;font-weight:600;font-size:14px}.c-m{flex:1 1 100%;order:-1;font-size:13px}
+.c-br{display:block;flex-basis:100%;height:0}
+.c-x{font-size:12px;color:var(--mut)}.c-x::before{content:attr(data-l) ": ";color:var(--mut)}
+.c-x .st{color:var(--txt)}.bar{width:32px}
+#gen,#vb{padding:0 12px}.gprop{grid-template-columns:1fr}
+#kpanel{right:8px;left:8px;width:auto;max-width:none;bottom:70px;max-height:70vh}
+#kbtn{right:12px;bottom:12px}
+}
 .chipy{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .chip{padding:6px 14px;border-radius:999px;border:1px solid var(--lin);background:var(--bg);color:var(--txt);font-weight:600;font-size:13px;cursor:pointer}
 .chip.on{background:#305496;border-color:#305496;color:#fff}
@@ -1581,6 +1602,7 @@ th{font-size:11px;text-transform:uppercase;color:var(--mut);font-weight:600}
 </style></head><body>
 <header><h1>Prognozy &middot; wygenerowano __DATA__ __BT__ &middot; <a href="#" id="dzwonek" style="font-size:14px;color:#4a7bd0">&#x1F514; Powiadomienia</a></h1>
 <div id="pushpanel" class="k" style="display:none;margin:8px 0;padding:12px;border:1px solid var(--lin);border-radius:10px;background:var(--bg);font-size:13px"></div>
+<details id="filtrDet" open><summary class="fsum">&#x2699;&#xFE0F; Filtry i sortowanie</summary>
 <div class="filtry">
 <label>Min. prawd. <input type="range" id="min" min="50" max="95" value="60"> <b id="minv">60</b>%</label>
 <label>Min. forma <input type="range" id="minf" min="0" max="100" step="10" value="0"> <b id="minfv">0</b>%</label>
@@ -1599,7 +1621,7 @@ th{font-size:11px;text-transform:uppercase;color:var(--mut);font-weight:600}
 <label><input type="checkbox" id="razem"> wszystkie typy w jednej liście</label>
 <input type="search" id="szukaj" placeholder="Szukaj drużyny lub ligi">
 
-</div>
+</div></details>
 <div class="chipy" id="chipy">
 <button class="chip on" data-rk="">Wszystkie</button><button class="chip" data-rk="wynik">&#x1F3C6; Wynik</button>
 <button class="chip" data-rk="bramki">&#x26BD; Bramki</button><button class="chip" data-rk="rozne">&#x1F6A9; Rożne</button>
@@ -1710,8 +1732,8 @@ if(c&&!c.brak&&c.wyb.some(z=>!stare.has(z.x.mi)||!K.has(z.x.id)))b=c}
 const c2=b||buduj(g.cel,+gmin.value||70,+gmax.value||6,stare);if(c2)g.b=c2;
 gprop.children[i].outerHTML=karta(i)}});
 const seria=x=>x.kat==="zaw"?`<br><span class="mm">${x.seria>=2?`&#x1F525; seria ${x.seria} &middot; `:""}ostatnie: ${x.ost}</span>`:"";
-const wiersz=x=>`<td><button class="dod${K.has(x.id)?" on":""}" data-id="${x.id}" title="Dodaj do kuponu">${K.has(x.id)?"&#10003;":"+"}</button></td><td>${x.typ}${seria(x)}</td><td><span class="p ${kl(x.p)}">${x.p}%</span></td><td>${x.kurs.toFixed(2)}</td>
-<td>${x.rynek?x.rynek.toFixed(2):"-"} ${x.value?'<span class="val">VALUE</span>':""}${x.k0?`<br><span class="mm" style="color:${x.k0>x.rynek?"#00b050":"#e0533d"}">${x.k0>x.rynek?"&#x2193;":"&#x2191;"} było ${x.k0.toFixed(2)}</span>`:""}${x.buk?`<br><span class="mm">${x.buk}</span>`:""}</td><td>${st(x.fh)}</td><td>${st(x.fg)}</td><td>${st(x.h2h)}</td>`;
+const wiersz=x=>`<td class="c-btn"><button class="dod${K.has(x.id)?" on":""}" data-id="${x.id}" title="Dodaj do kuponu">${K.has(x.id)?"&#10003;":"+"}</button></td><td class="c-typ">${x.typ}${seria(x)}</td><td class="c-p"><span class="p ${kl(x.p)}">${x.p}%</span></td><td class="c-br"></td><td class="c-x" data-l="uczciwy">${x.kurs.toFixed(2)}</td>
+<td class="c-x" data-l="kurs">${x.rynek?x.rynek.toFixed(2):"-"} ${x.value?'<span class="val">VALUE</span>':""}${x.k0?`<br><span class="mm" style="color:${x.k0>x.rynek?"#00b050":"#e0533d"}">${x.k0>x.rynek?"&#x2193;":"&#x2191;"} było ${x.k0.toFixed(2)}</span>`:""}${x.buk?`<br><span class="mm">${x.buk}</span>`:""}</td><td class="c-x" data-l="${x.m.h}">${st(x.fh)}</td><td class="c-x" data-l="${x.m.g}">${st(x.fg)}</td><td class="c-x" data-l="H2H">${st(x.h2h)}</td>`;
 const kl=p=>p>=80?"z1":p>=70?"z2":p>=60?"z3":"z4";
 const kol=q=>q>=.8?"#00b050":q>=.6?"#92d050":q>=.4?"#ffd84d":"#f4a582";
 function st(s){if(!s[1])return'<span style="color:var(--mut)">-</span>';const q=s[0]/s[1];
@@ -1742,10 +1764,10 @@ const t=D.flatMap(m=>m.typy).filter(x=>x.rynek&&x.p>=pm&&pasujeKat(x)).map(x=>({
 const VS={ev:(a,b)=>b.ev-a.ev,kd:(a,b)=>b.x.rynek-a.x.rynek,kr:(a,b)=>a.x.rynek-b.x.rynek,p:(a,b)=>b.x.p-a.x.p,t:(a,b)=>a.x.m.ts-b.x.m.ts};
 t.sort((a,b)=>VS[vsort.value](a,b)||b.ev-a.ev);
 vlista.innerHTML=t.length?`<table><tr><th></th><th>Mecz</th><th>Typ</th><th>Szansa</th><th>Uczciwy kurs</th><th>Kurs</th><th>Przewaga</th></tr>
-${t.map(({x,ev})=>`<tr><td><button class="dod${K.has(x.id)?" on":""}" data-id="${x.id}">${K.has(x.id)?"&#10003;":"+"}</button></td>
-<td><b>${x.m.h} &ndash; ${x.m.g}</b><br><span class="mm">${x.m.liga} &middot; ${x.m.data} ${x.m.godz}</span></td><td>${x.typ}</td>
-<td><span class="p ${kl(x.p)}">${x.p}%</span></td><td>${x.kurs.toFixed(2)}</td><td><b>${x.rynek.toFixed(2)}</b>${x.buk?`<br><span class="mm">${x.buk}</span>`:""}</td>
-<td class="plus">+${(ev*100).toFixed(1)}%</td></tr>`).join("")}</table>`:'<p class="knot">Brak value betów przy tych ustawieniach. Kursy bukmacherów są tylko dla 1X2 i goli (więcej rynków z kluczem The Odds API).</p>'}
+${t.map(({x,ev})=>`<tr><td class="c-btn"><button class="dod${K.has(x.id)?" on":""}" data-id="${x.id}">${K.has(x.id)?"&#10003;":"+"}</button></td>
+<td class="c-m"><b>${x.m.h} &ndash; ${x.m.g}</b><br><span class="mm">${x.m.liga} &middot; ${x.m.data} ${x.m.godz}</span></td><td class="c-typ">${x.typ}</td>
+<td class="c-p"><span class="p ${kl(x.p)}">${x.p}%</span></td><td class="c-br"></td><td class="c-x" data-l="uczciwy">${x.kurs.toFixed(2)}</td><td class="c-x" data-l="kurs"><b>${x.rynek.toFixed(2)}</b>${x.buk?` <span class="mm">${x.buk}</span>`:""}</td>
+<td class="c-x plus" data-l="przewaga">+${(ev*100).toFixed(1)}%</td></tr>`).join("")}</table>`:'<p class="knot">Brak value betów przy tych ustawieniach. Kursy bukmacherów są tylko dla 1X2 i goli (więcej rynków z kluczem The Odds API).</p>'}
 for(const e of [vpod,vmin,vpmin,vmax,vsort])e.addEventListener("input",value);
 function rys(){value();const mn=+min.value,mf=+minf.value/100,v=val.checked,q=szukaj.value.toLowerCase();
 minv.textContent=mn;minfv.textContent=minf.value;let html="";
@@ -1753,7 +1775,7 @@ const ok=x=>pasujeKat(x)&&x.p>=mn&&(!v||x.value)&&(!mf||[x.fh,x.fg].every(s=>s[1
 const pasuje=m=>!q||(m.h+" "+m.g+" "+m.liga).toLowerCase().includes(q);
 if(razem.checked){const t=sortuj(D.filter(pasuje).flatMap(m=>m.typy.filter(ok)));
 lista.innerHTML=t.length?`<div class="mecz"><div class="wrap"><table><tr><th></th><th>Mecz</th><th>Typ</th><th>Prawd.</th><th>Uczciwy kurs</th><th>Kurs rynku</th><th>Forma gosp.</th><th>Forma gościa</th><th>H2H</th></tr>
-${t.map(x=>`<tr>${wiersz(x).replace("</td>",`</td><td><b>${x.m.h} &ndash; ${x.m.g}</b><br><span style="color:var(--mut);font-size:11px">${x.m.liga} &middot; ${x.m.data} ${x.m.godz}</span></td>`)}</tr>`).join("")}</table></div></div>`:'<p>Brak typów przy tych filtrach.</p>';return}
+${t.map(x=>`<tr>${wiersz(x).replace("</td>",`</td><td class="c-m"><b>${x.m.h} &ndash; ${x.m.g}</b><br><span style="color:var(--mut);font-size:11px">${x.m.liga} &middot; ${x.m.data} ${x.m.godz}</span></td>`)}</tr>`).join("")}</table></div></div>`:'<p>Brak typów przy tych filtrach.</p>';return}
 const mecze=D.filter(pasuje).map(m=>({m,t:sortuj(m.typy.filter(ok))})).filter(z=>z.t.length);
 if(sort.value!=="p")mecze.sort((a,b)=>KLUCZ[sort.value](a.t[0])-KLUCZ[sort.value](b.t[0]));
 for(const {m,t} of mecze){
@@ -1767,6 +1789,7 @@ ${t.map(x=>`<tr>${wiersz(x)}</tr>`).join("")}
 lista.innerHTML=html||'<p>Brak typów przy tych filtrach.</p>'}
 if(location.hostname==="localhost"||location.hostname==="127.0.0.1")setTimeout(()=>location.reload(),15*60*1000);
 for(const e of [min,minf,val,szukaj,sort,razem,kat,liga])e.addEventListener("input",rys);wczytaj();rys();kupon();generuj();
+if(innerWidth<=640){filtrDet.open=false;vb.open=false;gen.open=false}
 if("serviceWorker" in navigator&&location.protocol.startsWith("http"))navigator.serviceWorker.register("sw.js").catch(()=>{});
 const VAPID=__VAPID__;
 const b64=s=>{const p="=".repeat((4-s.length%4)%4),r=atob((s+p).replace(/-/g,"+").replace(/_/g,"/"));return Uint8Array.from([...r].map(c=>c.charCodeAt(0)))};
