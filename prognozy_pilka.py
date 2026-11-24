@@ -1700,7 +1700,13 @@ background:var(--bg);border-radius:6px;padding:0 7px}
 .sb .t{font-family:var(--cond);font-weight:700;font-size:24px;line-height:1.1}.sb .t2{text-align:right}
 .xg{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;font-family:var(--cond);font-weight:700;font-size:18px}
 .xgbar{height:8px;border-radius:4px;background:var(--away);overflow:hidden}.xgbar i{display:block;height:100%;background:var(--home)}
-.xg .h{color:var(--home)}.xg .a{color:var(--away)}.xgl{grid-column:1/-1;text-align:center;font:500 11px Barlow,sans-serif;color:var(--mut);margin-top:-4px}
+.xg .h{color:var(--home)}.xg .a{color:var(--away)}
+.wdl{margin-top:10px}.wdlbar{display:flex;height:6px;border-radius:3px;overflow:hidden;gap:2px}
+.wdlbar i{display:block;height:100%}.w1{background:var(--home)}.wx{background:var(--mut)}.w2{background:var(--away)}
+.wdlt{display:flex;justify-content:space-between;gap:8px;margin-top:4px;font-size:13px;color:var(--mut)}
+.wdlt b{font-family:var(--cond);font-size:18px;color:var(--txt);margin-right:3px}.wdlt b.h{color:var(--home)}.wdlt b.a{color:var(--away)}
+.wdlt span:nth-child(2){text-align:center}.wdlt span:last-child{text-align:right}
+@media(max-width:640px){.wdlt span{font-size:11px}.wdlt b{display:block;font-size:17px}}.xgl{grid-column:1/-1;text-align:center;font:500 11px Barlow,sans-serif;color:var(--mut);margin-top:-4px}
 .info{gap:6px 8px;margin-top:10px}.info span{background:var(--bg);border-radius:6px;padding:2px 8px}
 .p{font-family:var(--cond);font-size:16px;border-radius:7px;padding:1px 8px}
 .z1{background:var(--win);color:#fff}.z2{background:#7CC36B;color:#10230f}.z3{background:#F2B33D;color:#2a1c00}.z4{background:#E58A5C;color:#2b1205}
@@ -1907,7 +1913,9 @@ for(const {m,t} of mecze){const mk=m.h+"|"+m.g+"|"+m.data,zw=ZWIN_DOM!==PRZEL.ha
 const xs_=m.lh+m.la||1;
 html+=`<div class="mecz${zw?" zw":""}" data-mk="${mk}"><div class="top"><span class="strz">${zw?"&#9656;":"&#9662;"}</span>
 <div class="meta"><span class="godz">${m.godz||"--:--"}</span><span>${m.data.slice(0,5).replace("/",".")}</span><span class="liga">${m.liga}</span></div>
-<div class="sb"><div class="t">${m.h}</div><div class="xg"><span class="h">${m.lh.toFixed(2)}</span><div class="xgbar"><i style="width:${(m.lh/xs_*100).toFixed(0)}%"></i></div><span class="a">${m.la.toFixed(2)}</span><div class="xgl">oczekiwane gole</div></div><div class="t t2">${m.g}</div></div>
+<div class="sb"><div class="t">${m.h}</div><div class="xg"><span class="h">${m.lh.toFixed(2)}</span><div class="xgbar"><i style="width:${(m.lh/xs_*100).toFixed(0)}%"></i></div><span class="a">${m.la.toFixed(2)}</span><div class="xgl">oczekiwane gole</div></div><div class="t t2">${m.g}</div></div>${m.p1x2?`
+<div class="wdl"><div class="wdlbar"><i class="w1" style="width:${m.p1x2[0]}%"></i><i class="wx" style="width:${m.p1x2[1]}%"></i><i class="w2" style="width:${m.p1x2[2]}%"></i></div>
+<div class="wdlt"><span><b class="h">${m.p1x2[0]}%</b> wygrana ${m.h}</span><span><b>${m.p1x2[1]}%</b> remis</span><span><b class="a">${m.p1x2[2]}%</b> wygrana ${m.g}</span></div></div>`:""}
 <div class="skrot">${naj.typ} <span class="p ${kl(naj.p)}" style="min-width:0;padding:0 8px">${naj.p}%</span> <span class="m">&middot; typów: ${t.length} &middot; dotknij, aby rozwinąć</span></div>
 <div class="info">${m.kartki?`<span>Kartki ~<b>${m.kartki}</b></span>`:""}${m.rozne?`<span>Rożne ~<b>${m.rozne}</b></span>`:""}${m.sedzia?`<span>Sędzia: <b>${m.sedzia}</b></span>`:""}${m.z_kursow?`<span title="Jedna z drużyn gra w lidze spoza bazy danych">&#x2139;&#xFE0F; prognoza tylko z kursów bukmacherów</span>`:""}
 <span>Najczęstsze wyniki: ${m.wyniki.join(", ")}</span></div>
@@ -2420,7 +2428,10 @@ def uruchom(a, otworz=True):
         forma_h = ostatnie_mecze(liga_h, h, a.forma)
         forma_g = ostatnie_mecze(liga_g, g, a.forma)
         h2h_m = pr.get("h2h", [])[:10]
-        mecz_html = {"liga": NAZWY.get(kod, kod), "data": w.get("Date", ""), "godz": w.get("Time", ""),
+        _p = {n: kalibruj(p, "wynik") for n, p, _, _ in t if n in ("1 (gospodarz)", "X (remis)", "2 (gość)")}
+        _s = sum(_p.values()) or 1
+        p1x2 = [round(_p.get(n, 0) / _s * 100) for n in ("1 (gospodarz)", "X (remis)", "2 (gość)")]
+        mecz_html = {"liga": NAZWY.get(kod, kod), "data": w.get("Date", ""), "godz": w.get("Time", ""), "p1x2": p1x2,
                      "h": h_pokaz, "g": g_pokaz, "lh": round(pr["lam_h"], 2), "la": round(pr["lam_a"], 2),
                      "kartki": round(pr["kartki"], 1) if pr.get("kartki") else None,
                      "rozne": round(pr["rozne"], 1) if pr.get("rozne") else None,
