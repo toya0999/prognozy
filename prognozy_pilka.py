@@ -36,6 +36,14 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 
 BASE = "https://www.football-data.co.uk"
+STAN_DANYCH = {}   # co się pobrało - pokazywane w zakładce "Stan danych"
+LOG = []
+
+
+def print(*args, **kw):       # zapisuje komunikaty, żeby pokazać problemy na stronie
+    import builtins
+    LOG.append(" ".join(str(x) for x in args))
+    builtins.print(*args, **kw)
 DOMYSLNE_LIGI = "E0,E1,SP1,I1,D1,F1,N1,P1,B1,T1,SC0,POL,ARG,BRA,LM,LE,LK"
 NOWE_LIGI = {"ARG": "Argentina", "BRA": "Brazil", "POL": "Poland", "AUT": "Austria", "DNK": "Denmark",
              "SWZ": "Switzerland", "NOR": "Norway", "SWE": "Sweden", "ROU": "Romania"}           # pliki /new/ (bez kartek i rożnych)
@@ -767,6 +775,7 @@ class ApiFootball:
         try:
             j, nag = pobierz_json(AF + sciezka, {"x-apisports-key": self.klucz})
             self.uzyte += 1
+            self.pozostalo = nag.get("x-ratelimit-requests-remaining", getattr(self, "pozostalo", None))
             time.sleep(6.5)                       # darmowy plan: max 10 zapytań na minutę
             if j.get("errors"):
                 import re
@@ -1365,15 +1374,16 @@ def zapisz_rozliczenie(historia, sciezka):
 
 
 ROZLICZENIE = """<!DOCTYPE html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Rozliczenie typów</title>__PWA__<style>
-:root{--bg:#f4f6f9;--card:#fff;--txt:#1d2330;--mut:#6b7385;--lin:#e3e7ee}
-@media(prefers-color-scheme:dark){:root{--bg:#12151b;--card:#1b2029;--txt:#e8ebf1;--mut:#97a0b3;--lin:#2b313d}}
-body{margin:0;font:14px/1.45 system-ui,Segoe UI,Arial;background:var(--bg);color:var(--txt)}main{max-width:1000px;margin:0 auto;padding:16px}
+<title>Rozliczenie typów</title>__PWA__<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet"><style>
+:root{--bg:#EEF2F6;--card:#fff;--txt:#12233A;--mut:#5B6B80;--lin:#D6DEE8;--amber:#C98A12;--amber-t:#fff}
+@media(prefers-color-scheme:dark){:root{--bg:#0E1A2B;--card:#15243A;--txt:#E9EEF5;--mut:#8FA3BC;--lin:#23364F;--amber:#F2B33D;--amber-t:#1B1405}}
+h1,h3{font-family:"Barlow Condensed","Arial Narrow",sans-serif}a{color:var(--amber)}
+body{margin:0;font:15px/1.5 Barlow,system-ui,sans-serif;background:var(--bg);color:var(--txt)}main{max-width:1000px;margin:0 auto;padding:16px}
 .k{background:var(--card);border:1px solid var(--lin);border-radius:12px;padding:14px 16px;margin-bottom:16px;overflow-x:auto}
 .m{color:var(--mut);font-size:12px}table{width:100%;border-collapse:collapse}td,th{padding:6px 8px;border-bottom:1px solid var(--lin);text-align:left;white-space:nowrap}
 th{font-size:11px;color:var(--mut);text-transform:uppercase}a{color:#4a7bd0}
 .chipy{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.chip{padding:6px 14px;border-radius:999px;border:1px solid var(--lin);background:var(--card);color:var(--txt);font-weight:600;cursor:pointer}
-.chip.on{background:#305496;color:#fff;border-color:#305496}.plus{color:#00b050;font-weight:700}.k:empty{display:none}#dni{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}#dni .chip{flex:0 0 auto}.minus{color:#e0533d;font-weight:700}
+.chip.on{background:var(--amber);color:var(--amber-t);border-color:var(--amber)}.plus{color:#00b050;font-weight:700}.k:empty{display:none}#dni{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}#dni .chip{flex:0 0 auto}.minus{color:#e0533d;font-weight:700}
 </style></head><body><main>
 <p><a href="index.html">&larr; Wróć do prognoz</a></p>
 <h1 style="font-size:20px">Rozliczenie typów (stawka 100 zł na zdarzenie)</h1>
@@ -1589,6 +1599,8 @@ STRONA = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Prognozy __DATA__</title>
 __PWA__
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#f4f6f9;--card:#fff;--txt:#1d2330;--mut:#6b7385;--lin:#e3e7ee}
 @media(prefers-color-scheme:dark){:root{--bg:#12151b;--card:#1b2029;--txt:#e8ebf1;--mut:#97a0b3;--lin:#2b313d}}
@@ -1655,8 +1667,64 @@ main{padding:10px 8px}.top{padding:10px 12px}.top b{font-size:15px}
 .gk ul{margin:6px 0;padding-left:18px}.mm{color:var(--mut);font-size:11px}
 #vb{background:var(--card);border:1px solid var(--lin);border-radius:12px;margin-bottom:16px;padding:0 16px}
 #vb summary{padding:14px 0;font-weight:700;font-size:15px;cursor:pointer}.plus{color:#00b050;font-weight:700}.gk li{margin:3px 0}.gk .mm{color:var(--mut);font-size:11px}.knot{font-size:11px;color:var(--mut);margin-top:8px}
+
+/* ===== Nocny stadion: granat, kreda, światło reflektorów ===== */
+:root{--bg:#EEF2F6;--card:#FFFFFF;--txt:#12233A;--mut:#5B6B80;--lin:#D6DEE8;--amber:#C98A12;--amber-t:#fff;
+--win:#1F9A5E;--loss:#D2492F;--home:#3F7FC4;--away:#C98A12;--cond:"Barlow Condensed","Arial Narrow",sans-serif}
+@media(prefers-color-scheme:dark){:root{--bg:#0E1A2B;--card:#15243A;--txt:#E9EEF5;--mut:#8FA3BC;--lin:#23364F;
+--amber:#F2B33D;--amber-t:#1B1405;--win:#2FA86B;--loss:#E05A47;--home:#7FB3E8;--away:#F2B33D}}
+body{font:15px/1.5 Barlow,system-ui,sans-serif;background:var(--bg)}
+a{color:var(--amber)}:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+header{background:var(--card);padding:0 16px 10px;border-bottom:1px solid var(--lin)}
+.bar1{display:flex;align-items:center;gap:10px;padding:12px 0 8px}
+.bar1 img{width:30px;height:30px;border-radius:7px}
+.brand{font-family:var(--cond);font-weight:700;font-size:24px;letter-spacing:.2px;line-height:1}
+.czas{color:var(--mut);font-size:13px;margin-left:auto;text-align:right}
+.taby{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--lin);margin:0 -16px 10px;padding:0 12px}
+.taby::-webkit-scrollbar{display:none}
+.tab{flex:0 0 auto;font-family:var(--cond);font-weight:600;font-size:17px;padding:8px 12px;border:0;background:none;color:var(--mut);
+border-bottom:3px solid transparent;cursor:pointer;text-decoration:none}
+.tab.on{color:var(--txt);border-bottom-color:var(--amber)}
+.kpi{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--mut);margin:2px 0 10px}
+.kpi b{font-family:var(--cond);font-size:19px;color:var(--txt);font-weight:700;margin-right:3px}
+.chip{background:var(--card);border-color:var(--lin);font-family:var(--cond);font-size:15px;font-weight:600}
+.chip.on{background:var(--amber);border-color:var(--amber);color:var(--amber-t)}
+#kbtn{background:var(--amber);color:var(--amber-t);font-family:var(--cond);font-size:17px}
+.kbt{background:var(--amber);color:var(--amber-t)}.kbt.sz{background:var(--lin);color:var(--txt)}
+.mecz{border-radius:14px;border-color:var(--lin);box-shadow:none}
+.top{padding:12px 16px 14px;border-bottom:1px solid var(--lin)}
+.meta{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--mut)}
+.liga{font-weight:600;color:var(--txt)}.godz{font-family:var(--cond);font-weight:600;font-size:16px;color:var(--txt);
+background:var(--bg);border-radius:6px;padding:0 7px}
+.sb{display:grid;grid-template-columns:1fr minmax(150px,240px) 1fr;align-items:center;gap:12px;margin-top:8px}
+.sb .t{font-family:var(--cond);font-weight:700;font-size:24px;line-height:1.1}.sb .t2{text-align:right}
+.xg{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;font-family:var(--cond);font-weight:700;font-size:18px}
+.xgbar{height:8px;border-radius:4px;background:var(--away);overflow:hidden}.xgbar i{display:block;height:100%;background:var(--home)}
+.xg .h{color:var(--home)}.xg .a{color:var(--away)}.xgl{grid-column:1/-1;text-align:center;font:500 11px Barlow,sans-serif;color:var(--mut);margin-top:-4px}
+.info{gap:6px 8px;margin-top:10px}.info span{background:var(--bg);border-radius:6px;padding:2px 8px}
+.p{font-family:var(--cond);font-size:16px;border-radius:7px;padding:1px 8px}
+.z1{background:var(--win);color:#fff}.z2{background:#7CC36B;color:#10230f}.z3{background:#F2B33D;color:#2a1c00}.z4{background:#E58A5C;color:#2b1205}
+th{text-transform:none;font-size:12px;letter-spacing:0}
+.dod{border-radius:8px}.dod.on{background:var(--amber);border-color:var(--amber);color:var(--amber-t)}
+.val{background:var(--amber);color:var(--amber-t)}
+.panel-ukryty{display:none!important}
+#stan .k{background:var(--card);border:1px solid var(--lin);border-radius:14px;padding:14px 16px}
+#stan .m{color:var(--mut);font-size:13px}#stan ul{padding-left:18px}
+.stan-g{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+.stan-g div{background:var(--bg);border-radius:10px;padding:10px 12px}.stan-g b{font-family:var(--cond);font-size:20px;display:block}
+.ok{color:var(--win)}.zle{color:var(--loss)}
+@media(max-width:640px){
+.sb{grid-template-columns:1fr 1fr;gap:6px 10px}.sb .t{font-size:20px}.xg{grid-column:1/-1;grid-row:2}
+.brand{font-size:21px}.czas{font-size:12px}
+}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style></head><body>
-<header><h1>Prognozy &middot; wygenerowano __DATA__ __BT__ &middot; <a href="#" id="dzwonek" style="font-size:14px;color:#4a7bd0">&#x1F514; Powiadomienia</a></h1>
+<header><div class="bar1"><img src="icon-192.png" alt=""><span class="brand">Prognozy</span>
+<span class="czas">Aktualizacja<br>__DATA__</span></div>
+<nav class="taby" id="taby"><button class="tab on" data-tab="mecze">Mecze</button><button class="tab" data-tab="vb">Value bety</button>
+<button class="tab" data-tab="gen">Generator</button><a class="tab" href="rozliczenie.html">Rozliczenie</a>__BT__
+<button class="tab" data-tab="stan">Stan danych</button><a class="tab" href="#" id="dzwonek">&#x1F514;</a></nav>
+<div class="kpi" id="kpi"></div>
 <div id="pushpanel" class="k" style="display:none;margin:8px 0;padding:12px;border:1px solid var(--lin);border-radius:10px;background:var(--bg);font-size:13px"></div>
 <details id="filtrDet" open><summary class="fsum">&#x2699;&#xFE0F; Filtry i sortowanie</summary>
 <div class="filtry">
@@ -1684,7 +1752,7 @@ main{padding:10px 8px}.top{padding:10px 12px}.top b{font-size:15px}
 <button class="chip" data-rk="kartki">&#x1F7E8; Kartki</button><button class="chip" data-rk="strzaly">&#x1F3AF; Strzały</button>
 <button class="chip" data-rk="zaw">&#x1F464; Zawodnicy</button></div>
 <div class="chipy" id="dni"></div></header>
-<main><p class="leg">Forma = ile razy dany typ wszedł w ostatnich __N__ meczach drużyny (dla gościa z jego perspektywy). H2H = w bezpośrednich meczach z 5 sezonów. Kolory: zielony = częściej, pomarańczowy = rzadziej.</p>
+<main><p class="leg panel-ukryty">Forma = ile razy dany typ wszedł w ostatnich __N__ meczach drużyny (dla gościa z jego perspektywy). H2H = w bezpośrednich meczach z 5 sezonów. Kolory: zielony = częściej, pomarańczowy = rzadziej.</p>
 <details id="vb" open><summary>&#x1F48E; Value bety</summary>
 <div class="kform"><label><input type="checkbox" id="vpod"> uwzględnij podatek 12%</label>
 <label>min. przewaga <input type="number" id="vmin" value="5" min="0" max="100" style="width:60px">%</label>
@@ -1703,7 +1771,8 @@ main{padding:10px 8px}.top{padding:10px 12px}.top b{font-size:15px}
 <button class="kbt" id="ggen">Generuj</button></div>
 <p class="knot" style="margin-top:0">Generator bierze pod uwagę filtry u góry strony (rodzaj typów, wyszukiwarkę). Każdy kupon to inne zdarzenia, gdy tylko się da.</p>
 <div class="gprop" id="gprop"></div></details>
-<div id="lista"></div></main>
+<div id="lista"></div>
+<section id="stan" class="panel-ukryty"></section></main>
 <button id="kbtn">&#x1F3AB; Kupon (0)</button>
 <div id="kpanel"><h2>Kreator kuponu</h2>
 <div class="kform"><b style="color:var(--txt)">Zbuduj automatycznie:</b>
@@ -1835,15 +1904,43 @@ ${t.map(x=>`<tr>${wiersz(x).replace("</td>",`</td><td class="c-m"><b>${x.m.h} &n
 const mecze=D.filter(pasuje).map(m=>({m,t:sortuj(m.typy.filter(ok))})).filter(z=>z.t.length);
 if(sort.value!=="p")mecze.sort((a,b)=>KLUCZ[sort.value](a.t[0])-KLUCZ[sort.value](b.t[0]));
 for(const {m,t} of mecze){const mk=m.h+"|"+m.g+"|"+m.data,zw=ZWIN_DOM!==PRZEL.has(mk),naj=t[0];
-html+=`<div class="mecz${zw?" zw":""}" data-mk="${mk}"><div class="top"><span class="strz">${zw?"&#9656;":"&#9662;"}</span><span class="m">${m.liga} &middot; ${m.data} ${m.godz}</span><br><b>${m.h} &ndash; ${m.g}</b>
+const xs_=m.lh+m.la||1;
+html+=`<div class="mecz${zw?" zw":""}" data-mk="${mk}"><div class="top"><span class="strz">${zw?"&#9656;":"&#9662;"}</span>
+<div class="meta"><span class="godz">${m.godz||"--:--"}</span><span>${m.data.slice(0,5).replace("/",".")}</span><span class="liga">${m.liga}</span></div>
+<div class="sb"><div class="t">${m.h}</div><div class="xg"><span class="h">${m.lh.toFixed(2)}</span><div class="xgbar"><i style="width:${(m.lh/xs_*100).toFixed(0)}%"></i></div><span class="a">${m.la.toFixed(2)}</span><div class="xgl">oczekiwane gole</div></div><div class="t t2">${m.g}</div></div>
 <div class="skrot">${naj.typ} <span class="p ${kl(naj.p)}" style="min-width:0;padding:0 8px">${naj.p}%</span> <span class="m">&middot; typów: ${t.length} &middot; dotknij, aby rozwinąć</span></div>
-<div class="info"><span>Oczekiwane gole: <b>${m.lh} : ${m.la}</b></span>${m.kartki?`<span>Kartki ~<b>${m.kartki}</b></span>`:""}${m.rozne?`<span>Rożne ~<b>${m.rozne}</b></span>`:""}${m.sedzia?`<span>Sędzia: <b>${m.sedzia}</b></span>`:""}${m.z_kursow?`<span title="Jedna z drużyn gra w lidze spoza bazy danych">&#x2139;&#xFE0F; prognoza tylko z kursów bukmacherów</span>`:""}
+<div class="info">${m.kartki?`<span>Kartki ~<b>${m.kartki}</b></span>`:""}${m.rozne?`<span>Rożne ~<b>${m.rozne}</b></span>`:""}${m.sedzia?`<span>Sędzia: <b>${m.sedzia}</b></span>`:""}${m.z_kursow?`<span title="Jedna z drużyn gra w lidze spoza bazy danych">&#x2139;&#xFE0F; prognoza tylko z kursów bukmacherów</span>`:""}
 <span>Najczęstsze wyniki: ${m.wyniki.join(", ")}</span></div>
 <div class="info"><span>H2H: ${m.h2h.length?m.h2h.join(" &middot; "):"brak meczów"}</span></div></div>
 <div class="wrap"><table><tr><th></th><th>Typ</th><th>Prawd.</th><th>Uczciwy kurs</th><th>Kurs rynku</th><th>Forma ${m.h}</th><th>Forma ${m.g}</th><th>H2H</th></tr>
 ${t.map(x=>`<tr>${wiersz(x)}</tr>`).join("")}
 </table></div></div>`}
 lista.innerHTML=(html?`<div class="zwbar"><button class="kbt sz" id="zwAll">&#9656; Zwiń wszystkie</button><button class="kbt sz" id="rozAll">&#9662; Rozwiń wszystkie</button></div>`:"")+(html||'<p>Brak typów przy tych filtrach.</p>')}
+const STAN=__STAN__;
+// zakładki
+const PANELE={mecze:["lista"],vb:["vb"],gen:["gen"],stan:["stan"]};
+taby.addEventListener("click",e=>{const b=e.target.closest("[data-tab]");if(!b)return;
+taby.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("on",x===b));
+for(const [t,ids] of Object.entries(PANELE))ids.forEach(id=>document.getElementById(id).classList.toggle("panel-ukryty",t!==b.dataset.tab));
+if(b.dataset.tab==="vb")vb.open=true;if(b.dataset.tab==="gen")gen.open=true;scrollTo({top:0})});
+["vb","gen"].forEach(id=>document.getElementById(id).classList.add("panel-ukryty"));
+// liczby na górze
+(()=>{const dz=new Date(),d=`${String(dz.getDate()).padStart(2,"0")}/${String(dz.getMonth()+1).padStart(2,"0")}/${dz.getFullYear()}`;
+const dzis=D.filter(m=>m.data===d).length,pewne=D.reduce((s,m)=>s+m.typy.filter(x=>x.p>=80&&x.kat!=="zaw").length,0),
+val=D.reduce((s,m)=>s+m.typy.filter(x=>x.value).length,0);
+kpi.innerHTML=`<span><b>${D.length}</b>meczów (dziś ${dzis})</span><span><b>${pewne}</b>typów od 80%</span><span><b>${val}</b>value betów</span>`+
+(STAN.wczoraj?`<span><b>${STAN.wczoraj[0]}/${STAN.wczoraj[1]}</b>wczoraj weszło</span>`:"")})();
+// stan danych
+(()=>{const z=(ok,t)=>`<span class="${ok?"ok":"zle"}">${ok?"&#10003;":"&#10007;"}</span> ${t}`;
+const L=Object.entries(STAN.ligi||{}).sort((a,b)=>b[1]-a[1]).map(([l,n])=>`${l}: ${n}`).join(", ")||"brak meczów";
+stan.innerHTML=`<div class="k"><h3 style="margin:0 0 10px;font-family:var(--cond);font-size:22px">Stan danych</h3>
+<p class="m">Co się pobrało przy ostatnim odświeżeniu (${STAN.czas}). Strona odświeża się sama co 3 godziny.</p>
+<div class="stan-g">
+<div><b>${D.length}</b>meczów w najbliższych dniach<br><span class="m">${L}</span></div>
+<div><b>${STAN.baza??0}</b>rozliczonych meczów w bazie<br><span class="m">${STAN.czeka??0} czeka na wynik</span></div>
+<div><b>${STAN.kal?"włączona":"wyłączona"}</b>kalibracja procentów<br><span class="m">${STAN.kal?"procenty poprawione według tego, jak typy naprawdę wchodziły w backteście":"poprawka nie pomagała, więc procenty są prosto z modelu"}</span></div>
+</div>
+</div>`})();
 let ZWIN_DOM=innerWidth<=640;const PRZEL=new Set();
 lista.addEventListener("click",e=>{
 if(e.target.closest("#zwAll")){ZWIN_DOM=true;PRZEL.clear();rys();return}
@@ -1884,9 +1981,9 @@ def zapisz_html(sciezka, mecze, n_forma, otworz=True, odswiez_url="", vapid_pub=
               .replace("__DATA__", datetime.now().strftime("%d.%m.%Y %H:%M"))
               .replace("__N__", str(n_forma)).replace("__PWA__", PWA_HEAD)
               .replace("__VAPID__", json.dumps(vapid_pub))
-              .replace("__BT__", (' &middot; <a href="backtest.html" style="font-size:14px;color:#4a7bd0">&#x1F4CA; Backtest</a>'
+              .replace("__STAN__", json.dumps(STAN_DANYCH, ensure_ascii=False))
+              .replace("__BT__", '<a class="tab" href="backtest.html">Backtest</a>'
                        if os.path.exists(os.path.join(os.path.dirname(sciezka) or ".", "backtest.html")) else "")
-                       + ' &middot; <a href="rozliczenie.html" style="font-size:14px;color:#4a7bd0">&#x1F9FE; Rozliczenie</a>')
               )
     with open(sciezka, "w", encoding="utf-8") as f:
         f.write(strona)
@@ -2415,6 +2512,36 @@ def uruchom(a, otworz=True):
     if af:
         print(f"\nAPI-Football: użyto {af.uzyte} zapytań w tym uruchomieniu")
     if a.html:
+        import re
+        bledy, widziane = [], set()
+        for l in LOG:
+            l2 = l.strip()
+            if any(x in l2 for x in ("nie pobrano", "błąd", "Błąd", "API-Football: {", "nie wysłano")) and l2 not in widziane:
+                widziane.add(l2)
+                bledy.append(l2[:200])
+        odds_left = None
+        for l in LOG:
+            m_ = re.search(r"zostało zapytań: (\d+)", l)
+            if m_:
+                odds_left = int(m_.group(1))
+        zaw = None
+        for l in LOG:
+            m_ = re.search(r"z min\. 3 meczami w bazie: (\d+/\d+)", l)
+            if m_:
+                zaw = m_.group(1)
+        ligi_n = {}
+        for m in mecze_html:
+            if m["typy"]:
+                ligi_n[m["liga"]] = ligi_n.get(m["liga"], 0) + 1
+        wcz = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+        roz = [tp for e in historia.values() if e["data"] == wcz and "wynik" in e for tp in e["typy"] if tp.get("traf") is not None]
+        STAN_DANYCH.update({
+            "czas": datetime.now().strftime("%d.%m.%Y %H:%M"), "ligi": ligi_n, "odds_left": odds_left,
+            "odds": any("Kursy " in l and "meczów" in l for l in LOG),
+            "af_used": af.uzyte if af else None, "af_left": getattr(af, "pozostalo", None) if af else None,
+            "zaw": zaw, "baza": sum(1 for e in historia.values() if "wynik" in e),
+            "czeka": sum(1 for e in historia.values() if "wynik" not in e), "kal": bool(KALIBRACJA),
+            "wczoraj": [sum(1 for t in roz if t["traf"]), len(roz)] if roz else None, "bledy": bledy[:15]})
         k_v = vapid_klucze(cache)
         zapisz_html(a.html, [m for m in mecze_html if m["typy"]], a.forma,
                     otworz and not a.nie_otwieraj, a.odswiez_url, k_v["pub"] if k_v else "")
