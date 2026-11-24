@@ -741,6 +741,9 @@ class ApiFootball:
     def __init__(self, klucz, cache):
         self.klucz, self.cache, self.uzyte = klucz, cache, 0
         self.wyczerpane = False
+        d = datetime.now().date()
+        # darmowy plan: tylko wczoraj / dziś / jutro (poprawiane, jeśli API poda inne okno)
+        self.okno = cache.get("af|okno") or [str(d - timedelta(days=1)), str(d + timedelta(days=1))]
 
     def get(self, sciezka, ttl_h=None, zapisz=True):
         dane = self.cache.get("af|" + sciezka, ttl_h)
@@ -754,6 +757,11 @@ class ApiFootball:
             self.uzyte += 1
             time.sleep(6.5)                       # darmowy plan: max 10 zapytań na minutę
             if j.get("errors"):
+                import re
+                m = re.search(r"from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})", str(j["errors"]))
+                if m:
+                    self.okno = [m.group(1), m.group(2)]
+                    self.cache.set("af|okno", self.okno)
                 print(f"  API-Football: {j['errors']}")
                 if "requests" in str(j["errors"]).lower() or "limit" in str(j["errors"]).lower():
                     self.wyczerpane = True
@@ -769,67 +777,118 @@ class ApiFootball:
             return self.cache.get("af|" + sciezka)
 
 
-def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=10):
+def w_oknie(af, dzien):
+    return af.okno[0] <= dzien <= af.okno[1]
+
+
+def lista_dnia(af, dzien, ttl_h):
+    """Mecze z danego dnia (YYYY-MM-DD) w skróconej postaci - zapamiętywane, żeby nie zużywać limitu.
+    Uczy się też nazw drużyn -> identyfikatorów API-Football."""
+    k = f"afd|{dzien}"
+    dane = af.cache.get(k, ttl_h)
+    if dane is not None:
+        return dane
+    if not w_oknie(af, dzien):          # poza oknem darmowego planu - nie pytamy (każde pytanie zużywa limit)
+        return af.cache.get(k) or []
+    pelne = af.get(f"/fixtures?date={dzien}&timezone=Europe/Warsaw", zapisz=False)
+    if pelne is None:
+        return af.cache.get(k) or []
+    dane = [{"fixture": {"id": f["fixture"]["id"], "status": {"short": (f["fixture"].get("status") or {}).get("short")}},
+             "teams": {"home": {"id": f["teams"]["home"]["id"], "name": f["teams"]["home"]["name"]},
+                       "away": {"id": f["teams"]["away"]["id"], "name": f["teams"]["away"]["name"]}},
+             "goals": f.get("goals")} for f in pelne]
+    af.cache.set(k, dane)
+    nazwy = af.cache.get("af|nazwy") or {}
+    for f in dane:
+        for s in ("home", "away"):
+            nazwy[normalizuj(f["teams"][s]["name"])] = [f["teams"][s]["id"], f["teams"][s]["name"]]
+    af.cache.set("af|nazwy", nazwy)
+    return dane
+
+
+def _zapisz_fx(af, fid, info, gracze_bloki):
+    af.cache.set(f"af|fx|{fid}", {
+        "gole": info.get("gole"), "teams": info.get("teams"),
+        "players": [{"team": p["team"]["id"], "players": [
+            {"name": x["player"]["name"], "s": x["statistics"][0] if x.get("statistics") else {}}
+            for x in p.get("players", [])]} for p in gracze_bloki]})
+
+
+def _ma_dane(af, fid):
+    c = af.cache.get(f"af|fx|{fid}")
+    return bool(c and c.get("players"))
+
+
+def id_druzyny(af, nazwa):
+    nazwy = af.cache.get("af|nazwy") or {}
+    k = znajdz(nazwa, nazwy)
+    return tuple(nazwy[k]) if k else None
+
+
+def zbieraj_zawodnikow(af, terminarz, wszystkie_druzyny=(), limit=60):
+    """Codziennie dopisuje statystyki zawodników z meczów z wczoraj/dziś drużyn, które niedługo grają.
+    Darmowy plan widzi tylko wczoraj-jutro, więc baza rośnie z dnia na dzień."""
+    dzis = datetime.now().date()
+    for n in (1, 0, -1):                                  # wczoraj, dziś, jutro (nazwy drużyn + wyniki)
+        lista_dnia(af, str(dzis - timedelta(days=n)), 2 if n >= 0 else 6)
+    interes, pilne = set(), set()        # pilne = grają w najbliższych dniach (pobierane najpierw)
+    for w in terminarz:
+        for nazwa in (w.get("HomeTeam", ""), w.get("AwayTeam", "")):
+            t = id_druzyny(af, nazwa)
+            if t:
+                pilne.add(t[0])
+    for nazwa in wszystkie_druzyny:
+        t = id_druzyny(af, nazwa)
+        if t:
+            interes.add(t[0])
+    interes |= pilne
+    pobrane = 0
+    kolejka = []
+    for n in (1, 0):
+        dzien = str(dzis - timedelta(days=n))
+        for f in lista_dnia(af, dzien, 2):
+            ids = (f["teams"]["home"]["id"], f["teams"]["away"]["id"])
+            if ids[0] in interes or ids[1] in interes:
+                kolejka.append((0 if (ids[0] in pilne or ids[1] in pilne) else 1, dzien, f))
+    kolejka.sort(key=lambda x: x[0])
+    for _, dzien, f in kolejka:
+        if True:
+            if (f["fixture"]["status"] or {}).get("short") not in ("FT", "AET", "PEN"):
+                continue
+            fid = f["fixture"]["id"]
+            for s in ("home", "away"):
+                tid = f["teams"][s]["id"]
+                if tid not in interes:
+                    continue
+                idx = af.cache.get(f"aft|{tid}") or []
+                if fid not in [x[1] for x in idx]:
+                    idx.append([dzien, fid])
+                    af.cache.set(f"aft|{tid}", sorted(idx, reverse=True)[:12])
+                if not _ma_dane(af, fid) and pobrane < limit and not af.wyczerpane:
+                    r = af.get(f"/fixtures/players?fixture={fid}", zapisz=False)
+                    pobrane += 1
+                    if r:
+                        _zapisz_fx(af, fid, {"gole": f.get("goals"), "teams": f.get("teams")}, r)
+    ile = sum(1 for t in pilne if len([1 for _, i in (af.cache.get(f"aft|{t}") or []) if _ma_dane(af, i)]) >= 3)
+    print(f"  [zawodnicy] zbieranie: pobrano statystyki {pobrane} meczów; drużyn grających wkrótce z min. 3 meczami "
+          f"w bazie: {ile}/{len(pilne)} (baza rośnie codziennie)")
+
+
+def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=6):
     """Typy na zawodników z serią albo dużą szansą. Zwraca listę typów (jak dla meczu)."""
     import math
-    if not data:
+    th, tg = id_druzyny(af, h), id_druzyny(af, g)
+    if not th or not tg:
         return []
-    dzien = datetime.strptime(data, "%d/%m/%Y").strftime("%Y-%m-%d")
-    lista = af.get(f"/fixtures?date={dzien}&timezone=Europe/Warsaw", ttl_h=12) or []
-    idx = {}
-    for f in lista:
-        idx.setdefault(normalizuj(f["teams"]["home"]["name"]), []).append(f)
-    k = znajdz(h, idx)
-    mecz = None
-    for f in idx.get(k, []):
-        if znajdz(g, {normalizuj(f["teams"]["away"]["name"]): 1}):
-            mecz = f
-    if not mecz:
-        print(f"   [zawodnicy] nie znaleziono meczu {h} - {g} w API-Football "
-              f"({len(lista)} meczów tego dnia" + ("" if lista else " - pusta odpowiedź, sprawdź błędy wyżej") + ")")
-        return []
-    druzyny = [(mecz["teams"]["home"], lam_h, "H"), (mecz["teams"]["away"], lam_a, "A")]
+    druzyny = [({"id": th[0], "name": th[1]}, lam_h, "H"), ({"id": tg[0], "name": tg[1]}, lam_a, "A")]
     ostatnie, info = {}, {}
     for t, _, _ in druzyny:
-        r = af.get(f"/fixtures?team={t['id']}&last={ile}", ttl_h=20) or []
-        ostatnie[t["id"]] = [f["fixture"]["id"] for f in r]
-        for f in r:
-            info[f["fixture"]["id"]] = {"gole": f.get("goals"), "teams": f.get("teams")}
-
-    def zapisz_fx(fid, gracze_bloki):
-        dane = info.get(fid, {})
-        af.cache.set(f"af|fx|{fid}", {
-            "gole": dane.get("gole"), "teams": dane.get("teams"),
-            "players": [{"team": p["team"]["id"], "players": [
-                {"name": x["player"]["name"], "s": x["statistics"][0] if x.get("statistics") else {}}
-                for x in p.get("players", [])]} for p in gracze_bloki]})
-
-    def ma_dane(fid):
-        c = af.cache.get(f"af|fx|{fid}")
-        return bool(c and c.get("players"))
-
-    # 1) zbiorczo: do 20 meczów w jednym zapytaniu
-    potrzebne = [i for ids in ostatnie.values() for i in ids if not ma_dane(i)]
-    for n in range(0, len(potrzebne), 20):
-        paczka = potrzebne[n:n + 20]
-        for f in af.get("/fixtures?ids=" + "-".join(map(str, paczka)), zapisz=False) or []:
-            fid = f["fixture"]["id"]
-            info.setdefault(fid, {"gole": f.get("goals"), "teams": f.get("teams")})
-            if f.get("players"):
-                zapisz_fx(fid, f["players"])
-    # 2) zapas: gdy plan nie zwraca zawodników zbiorczo -> osobno, 5 ostatnich meczów każdej drużyny
-    for t, _, _ in druzyny:
-        for fid in ostatnie.get(t["id"], [])[:5]:
-            if ma_dane(fid) or af.wyczerpane:
-                continue
-            r = af.get(f"/fixtures/players?fixture={fid}", zapisz=False)
-            if r:
-                zapisz_fx(fid, r)
+        ostatnie[t["id"]] = [i for _, i in (af.cache.get(f"aft|{t['id']}") or [])][:ile]
+    ma_dane = lambda fid: _ma_dane(af, fid)
     for t, _, _ in druzyny:
         n_ok = sum(1 for i in ostatnie.get(t["id"], []) if ma_dane(i))
-        print(f"   [zawodnicy] {t['name']}: mecze ze statystykami zawodników {n_ok}/{len(ostatnie.get(t['id'], []))}")
-    if not any(ostatnie.values()):
-        print(f"   [zawodnicy] API-Football nie zwróciło ostatnich meczów drużyn {h} / {g}")
+        if n_ok < 3:
+            print(f"   [zawodnicy] {t['name']}: w bazie {n_ok} mecz(e) ze statystykami - potrzeba 3 (zbieram codziennie)")
     typy_zaw = []
     for t, lam, strona in druzyny:
         mecze = [af.cache.get(f"af|fx|{i}") for i in ostatnie.get(t["id"], [])]
@@ -1182,7 +1241,7 @@ def wyniki_fixturedownload(laduj_tekst, slug):
 def statystyki_af(af, e):
     """Wynik i statystyki meczu z API-Football (gdy football-data jeszcze ich nie ma)."""
     dzien = datetime.strptime(e["data"], "%d/%m/%Y").strftime("%Y-%m-%d")
-    lista = af.get(f"/fixtures?date={dzien}&timezone=Europe/Warsaw", ttl_h=2) or []
+    lista = lista_dnia(af, dzien, 2)
     idx = {}
     for f in lista:
         idx.setdefault(normalizuj(f["teams"]["home"]["name"]), []).append(f)
@@ -1755,7 +1814,7 @@ def main():
     ap.add_argument("--kursy-co", type=float, default=24, help="co ile godzin pobierać kursy (oszczędza limit)")
     ap.add_argument("--af-key", default=os.environ.get("APIFOOTBALL_KEY"),
                     help="klucz API-Football: statystyki zawodników")
-    ap.add_argument("--zaw-max", type=int, default=12, help="dla ilu meczów liczyć zawodników (limit 100 zapytań/dzień)")
+    ap.add_argument("--zaw-max", type=int, default=200, help="dla ilu meczów liczyć zawodników (limit 100 zapytań/dzień)")
     ap.add_argument("--value-prog", type=float, default=1.05, help="value bet gdy szansa x kurs > próg")
     ap.add_argument("--cache", default="cache_api.json", help="plik pamięci podręcznej API")
     ap.add_argument("--historia", default="historia.json", help="plik dziennika typów (do rozliczenia)")
@@ -1936,6 +1995,11 @@ def uruchom(a, otworz=True):
         kursy_api = kursy_odds_api(a.odds_key, sorted({w["Div"] for w in terminarz}), cache, a.kursy_co)
     af = ApiFootball(a.af_key, cache) if a.af_key else None
     ile_zaw = 0
+    if af and terminarz:
+        try:
+            zbieraj_zawodnikow(af, terminarz, [d for kod in modele for d in modele[kod].dom])
+        except Exception as e:
+            print(f"  [zawodnicy] zbieranie: błąd {e}")
     # ---- dziennik typów: rozliczenie zakończonych meczów ----
     historia = wczytaj_historie(a.historia)
     wyniki_fd = {}
