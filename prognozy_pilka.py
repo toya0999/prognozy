@@ -762,8 +762,9 @@ class ApiFootball:
         self.klucz, self.cache, self.uzyte = klucz, cache, 0
         self.wyczerpane = False
         d = datetime.now().date()
-        # darmowy plan: tylko wczoraj / dziś / jutro (poprawiane, jeśli API poda inne okno)
-        self.okno = cache.get("af|okno") or [str(d - timedelta(days=1)), str(d + timedelta(days=1))]
+        # darmowy plan: tylko wczoraj / dziś / jutro (zapamiętujemy przesunięcia względem dziś, nie daty)
+        przes = cache.get("af|okno_dni") or [-1, 1]
+        self.okno = [str(d + timedelta(days=przes[0])), str(d + timedelta(days=przes[1]))]
 
     def get(self, sciezka, ttl_h=None, zapisz=True):
         dane = self.cache.get("af|" + sciezka, ttl_h)
@@ -782,7 +783,9 @@ class ApiFootball:
                 m = re.search(r"from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})", str(j["errors"]))
                 if m:
                     self.okno = [m.group(1), m.group(2)]
-                    self.cache.set("af|okno", self.okno)
+                    d0 = datetime.now().date()
+                    self.cache.set("af|okno_dni", [(date.fromisoformat(m.group(1)) - d0).days,
+                                                   (date.fromisoformat(m.group(2)) - d0).days])
                 print(f"  API-Football: {j['errors']}")
                 if "requests" in str(j["errors"]).lower() or "limit" in str(j["errors"]).lower():
                     self.wyczerpane = True
@@ -1282,7 +1285,10 @@ def statystyki_af(af, e):
     for f in idx.get(znajdz(e["hp"], idx), []):
         if znajdz(e["gp"], {normalizuj(f["teams"]["away"]["name"]): 1}):
             mecz = f
-    if not mecz or (mecz.get("fixture", {}).get("status", {}) or {}).get("short") not in ("FT", "AET", "PEN"):
+    if not mecz:
+        print(f"   [rozliczenie] API-Football: nie znaleziono {e['hp']} - {e['gp']} ({len(lista)} meczów {dzien})")
+        return None
+    if ((mecz.get("fixture", {}).get("status", {}) or {}).get("short") not in ("FT", "AET", "PEN")):
         return None
     w = {"FTHG": (mecz.get("goals") or {}).get("home"), "FTAG": (mecz.get("goals") or {}).get("away")}
     ks = f"af|st|{mecz['fixture']['id']}"
@@ -1305,12 +1311,15 @@ def rozlicz_historie(historia, surowe, wyniki_fd, af):
     """Uzupełnia wynik i trafienia typów w zapisanych meczach."""
     teraz = datetime.now()
     ile_af = 0
+    diag = {"do_rozliczenia": 0, "football-data": 0, "API-Football": 0, "fixturedownload": 0, "brak": 0}
+    brakujace = []
     for e in historia.values():
         if e.get("koniec"):
             continue
         st = start_meczu(e)
         if not st or teraz < st + timedelta(hours=2, minutes=15):
             continue
+        diag["do_rozliczenia"] += 1
         wiersz, zrodlo = None, ""
         # 1) football-data: pełne statystyki
         for x, _ in surowe.get(e["kod"], []):
@@ -1333,9 +1342,13 @@ def rozlicz_historie(historia, surowe, wyniki_fd, af):
                     wiersz, zrodlo = {"FTHG": m["hg"], "FTAG": m["ag"]}, "fixturedownload (tylko gole)"
                     break
         if not wiersz:
+            diag["brak"] += 1
+            if len(brakujace) < 5:
+                brakujace.append(f'{e["liga"]} {e["data"][:5]} {e["hp"]} - {e["gp"]}')
             if teraz > st + timedelta(days=4):
                 e["koniec"] = True       # nie znaleziono wyniku - dajemy spokój
             continue
+        diag[zrodlo.split(" ")[0]] = diag.get(zrodlo.split(" ")[0], 0) + 1
         wiersz["HomeTeam"], wiersz["AwayTeam"] = e["h"], e["g"]
         e["wynik"] = f'{int(float(wiersz["FTHG"]))}:{int(float(wiersz["FTAG"]))}'
         e["zrodlo"] = zrodlo
@@ -1351,6 +1364,12 @@ def rozlicz_historie(historia, surowe, wyniki_fd, af):
         # pełne dane albo minęły 4 dni -> zamykamy
         if not brak or teraz > st + timedelta(days=4) or zrodlo == "football-data":
             e["koniec"] = True
+    zapisane = sum(1 for e in historia.values() if start_meczu(e) and start_meczu(e) < teraz)
+    print(f"Rozliczanie: zapisanych rozegranych meczów {zapisane}, do rozliczenia teraz {diag['do_rozliczenia']}, "
+          f"wyniki z: football-data {diag['football-data']}, API-Football {diag['API-Football']}, "
+          f"fixturedownload {diag['fixturedownload']}; bez wyniku {diag['brak']}"
+          + (f" (np. {'; '.join(brakujace)})" if brakujace else "")
+          + ("" if af else " | brak klucza API-Football") + (" | limit API-Football wyczerpany" if af and af.wyczerpane else ""))
 
 
 def zapisz_rozliczenie(historia, sciezka):
