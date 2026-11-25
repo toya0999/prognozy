@@ -963,7 +963,10 @@ def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=6):
                     gracze.setdefault(x["name"], []).append({
                         "min": mins, "gol": g_.get("total") or 0, "as": g_.get("assists") or 0,
                         "sot": sh.get("on") or 0, "sh": sh.get("total") or 0,
-                        "kar": (c.get("yellow") or 0) + (c.get("red") or 0)})
+                        "kar": (c.get("yellow") or 0) + (c.get("red") or 0),
+                        "fc": (s.get("fouls") or {}).get("committed") or 0,
+                        "fs": (s.get("fouls") or {}).get("drawn") or 0,
+                        "tk": (s.get("tackles") or {}).get("total") or 0})
         dane.append((t["name"], lam, strona, gole_druz, gracze))
     return typy_z_wystepow(h, g, dane)
 
@@ -987,8 +990,15 @@ def typy_z_wystepow(h, g, dane):
                 ("celny strzał 1+", "sot", 1, f_atak ** 0.5, 0.75, 5),
                 ("strzały 2+", "sh", 2, f_atak ** 0.5, 0.70, 5),
                 ("kartka", "kar", 1, 1.0, 0.40, 3),
+                ("faule 1+", "fc", 1, 1.0, 0.80, 5),
+                ("faule 2+", "fc", 2, 1.0, 0.60, 4),
+                ("faulowany 1+", "fs", 1, 1.0, 0.80, 5),
+                ("faulowany 2+", "fs", 2, 1.0, 0.60, 4),
+                ("odbiory 2+", "tk", 2, 1.0, 0.65, 4),
             ]
             for nazwa, pole, prog, f_adj, p_min, seria_min in rynki:
+                if any(w.get(pole) is None for w in wyst):
+                    continue                   # tej statystyki nie ma w źródle (np. odbiory w ESPN)
                 suma = sum(w[pole] for w in wyst)
                 if pole == "kar":
                     suma, mins_ = suma + 0.18, mins + 90  # wygładzenie małej próbki
@@ -1011,11 +1021,17 @@ def typy_z_wystepow(h, g, dane):
                         "kurs": round(1 / p, 2), "rynek": None, "value": False,
                         "fh": [sum(traf), len(traf)] if strona == "H" else [0, 0],
                         "fg": [sum(traf), len(traf)] if strona == "A" else [0, 0],
-                        "h2h": [0, 0], "seria": seria,
+                        "h2h": [0, 0], "seria": seria, "spec": ["zaw", imie, pole, prog, strona],
                         "ost": "".join("✓" if x else "✗" for x in traf[:5])})
     typy_zaw.sort(key=lambda x: (-x["seria"], -x["p"]))
-    print(f"   [zawodnicy] {h} - {g}: typów na zawodników {len(typy_zaw)}")
-    return typy_zaw[:12]
+    ile_r, wybrane = {}, []
+    for x in typy_zaw:                         # max 4 na rynek, żeby np. faule nie zasłoniły strzałów i goli
+        r = x["typ"].rsplit(": ", 1)[-1]
+        if ile_r.get(r, 0) < 4:
+            ile_r[r] = ile_r.get(r, 0) + 1
+            wybrane.append(x)
+    print(f"   [zawodnicy] {h} - {g}: typów na zawodników {len(wybrane)}")
+    return wybrane[:16]
 
 
 # ---------- BACKTEST ----------
@@ -1315,6 +1331,32 @@ def espn_statystyki(cache, kod, ev_id):
     return st
 
 
+def espn_id_rozegranego(cache, e):
+    gotowe = [m for m in espn_mecze(cache, e["kod"], e["data"]) if m["koniec"]]
+    pasuje = lambda a, b: bool(znajdz(a, {normalizuj(b): 1}))
+    pelne = [m for m in gotowe if pasuje(e["hp"], m["h"]) and pasuje(e["gp"], m["g"])] or \
+        [m for m in gotowe if pasuje(e["hp"], m["h"]) or pasuje(e["gp"], m["g"])]
+    return pelne[0]["id"] if len(pelne) == 1 else None
+
+
+def rozlicz_zawodnika(cache, e, ev_id, spec):
+    """True/False = typ na zawodnika wszedł/nie wszedł; 'zwrot' = nie zagrał; None = brak danych."""
+    _, imie, pole, prog, strona = spec
+    m = espn_gracze(cache, ESPN_LIGI[e["kod"]], ev_id)
+    if not m or len(m) < 2:
+        return None
+    tid = ((m.get("_info") or {}).get("strony") or {}).get(strona)
+    druz = m.get(tid) if tid else None
+    kandydaci = [druz] if druz else [v for k, v in m.items() if k != "_info"]
+    for d_ in kandydaci:
+        w = (d_.get("gracze") or {}).get(imie)
+        if w is not None:
+            if w.get(pole) is None:
+                return None
+            return w[pole] >= prog
+    return "zwrot"
+
+
 def wynik_espn(cache, e):
     gotowe = [m for m in espn_mecze(cache, e["kod"], e["data"])
               if m["koniec"] and m["hg"] not in (None, "") and m["ag"] not in (None, "")]
@@ -1325,7 +1367,7 @@ def wynik_espn(cache, e):
         pelne = pelne if len(pelne) == 1 else []
     for m in pelne[:1]:
         if True:
-            w = {"FTHG": m["hg"], "FTAG": m["ag"]}
+            w = {"FTHG": m["hg"], "FTAG": m["ag"], "_espn": m["id"]}
             st = espn_statystyki(cache, e["kod"], m["id"])
             for kl, col in (("C", "C"), ("Y", "Y"), ("R", "R"), ("S", "S"), ("ST", "ST")):
                 for strona in ("H", "A"):
@@ -1401,7 +1443,7 @@ def espn_ostatnie(cache, ligi, tid, n=6):
 
 def espn_gracze(cache, liga, ev_id):
     """{id drużyny: {"gole": n, "gracze": {nazwisko: występ}}} z jednego meczu."""
-    k = f"espn|pl|{ev_id}"
+    k = f"espn|pl2|{ev_id}"
     d = cache.get(k)
     if d is not None:
         return d
@@ -1411,13 +1453,18 @@ def espn_gracze(cache, liga, ev_id):
         j = _espn(f"{ESPN}/{liga}/summary?event={ev_id}")
     except Exception:
         return None
-    gole = {}
-    for c in ((j.get("header") or {}).get("competitions") or [{}])[0].get("competitors", []):
+    gole, info = {}, {"strony": {}, "nazwy": {}, "data": ""}
+    hc = ((j.get("header") or {}).get("competitions") or [{}])[0]
+    info["data"] = (hc.get("date") or "")[:10]
+    for c in hc.get("competitors", []):
+        tid_ = str(c.get("id") or (c.get("team") or {}).get("id"))
+        info["strony"]["H" if c.get("homeAway") == "home" else "A"] = tid_
+        info["nazwy"][tid_] = (c.get("team") or {}).get("displayName", "")
         try:
-            gole[str(c.get("id") or c["team"]["id"])] = int(c.get("score"))
-        except (TypeError, ValueError, KeyError):
+            gole[tid_] = int(c.get("score"))
+        except (TypeError, ValueError):
             pass
-    d = {}
+    d = {"_info": info}
     for t in j.get("rosters", []):
         tid = str((t.get("team") or {}).get("id"))
         gracze = {}
@@ -1432,10 +1479,11 @@ def espn_gracze(cache, liga, ev_id):
             gracze[(p.get("athlete") or {}).get("displayName", "?")] = {
                 "min": mins, "gol": int(st.get("totalGoals", 0)), "as": int(st.get("goalAssists", 0)),
                 "sot": int(st.get("shotsOnTarget", 0)), "sh": int(st.get("totalShots", 0)),
-                "kar": int(st.get("yellowCards", 0)) + int(st.get("redCards", 0))}
+                "kar": int(st.get("yellowCards", 0)) + int(st.get("redCards", 0)),
+                "fc": int(st.get("foulsCommitted", 0)), "fs": int(st.get("foulsSuffered", 0))}
         if gracze:
             d[tid] = {"gole": gole.get(tid), "gracze": gracze}
-    if d:
+    if len(d) > 1:
         cache.set(k, d)
     return d
 
@@ -1444,29 +1492,41 @@ def zawodnicy_espn(cache, kod, data, h, g, lam_h, lam_a, ligi_dom=None, ile=6):
     """Typy na zawodników z danych ESPN. None = ESPN nie zna tego meczu (wtedy próbujemy API-Football)."""
     ids = espn_ids_meczu(cache, kod, data, h, g)
     if not ids:
-        return None
+        return None, None
     liga, hid, gid = ids
     ligi_dom = ligi_dom or {}
-    dane = []
+    dane, lab = [], {}
     for nazwa, tid, lam, strona in ((h, hid, lam_h, "H"), (g, gid, lam_a, "A")):
+        wiersze = {}
         ligi = [liga] + [ESPN_LIGI[k] for k in ligi_dom.get(nazwa, []) if k in ESPN_LIGI and ESPN_LIGI[k] != liga]
         gole_druz, gracze, n = [], {}, 0
-        for _, ev_id, sl in espn_ostatnie(cache, ligi, tid, ile):
+        for dt, ev_id, sl in espn_ostatnie(cache, ligi, tid, ile):
             m = espn_gracze(cache, sl, ev_id)
             if not m or str(tid) not in m:
                 continue
             n += 1
+            inf = m.get("_info") or {}
+            dom = (inf.get("strony") or {}).get("H") == str(tid)
+            rywal = next((v for k_, v in (inf.get("nazwy") or {}).items() if k_ != str(tid)), "?")
             if m[str(tid)].get("gole") is not None:
                 gole_druz.append(m[str(tid)]["gole"])
             for imie, w in m[str(tid)]["gracze"].items():
                 gracze.setdefault(imie, []).append(w)
+                wiersze.setdefault(imie, []).append(
+                    [f"{dt[8:10]}.{dt[5:7]}.{dt[2:4]}", rywal, dom, w["gol"], w["as"], w["sh"], w["sot"], w["kar"],
+                     w["fc"], w["fs"], w["min"]])
+        regularni = sorted(((imie, r) for imie, r in wiersze.items()
+                            if len(r) >= 3 and sum(1 for x in r[:5] if x[10] >= 45) >= 2),
+                           key=lambda z: -sum(x[10] for x in z[1]))[:16]
+        if regularni:
+            lab[strona] = regularni
         if n < 3:
             pow_ = "limit zapytań na to odświeżenie - dobierze następnym razem" \
                 if ESPN_ZAW["licznik"] >= ESPN_ZAW["limit"] else "za mało"
             print(f"   [zawodnicy] {nazwa}: w ESPN {n} mecz(e) ze statystykami - {pow_}")
             continue
         dane.append((nazwa, lam, strona, gole_druz, gracze))
-    return typy_z_wystepow(h, g, dane)
+    return typy_z_wystepow(h, g, dane), lab
 
 
 # ---------- DZIENNIK TYPÓW I ROZLICZENIE ----------
@@ -1627,9 +1687,28 @@ def rozlicz_historie(historia, surowe, wyniki_fd, af, cache=None):
         wiersz["HomeTeam"], wiersz["AwayTeam"] = e["h"], e["g"]
         e["wynik"] = f'{int(float(wiersz["FTHG"]))}:{int(float(wiersz["FTAG"]))}'
         e["zrodlo"] = zrodlo
-        brak = 0
+        brak, brak_zaw = 0, 0
+        ev_espn = wiersz.get("_espn")
         for t in e["typy"]:
-            if t.get("traf") is not None:
+            if t.get("traf") is not None or t.get("zwrot"):
+                continue
+            if t["spec"][0] == "zaw":
+                r = None
+                if cache is not None and e["kod"] in ESPN_LIGI:
+                    try:
+                        if not ev_espn:
+                            ev_espn = espn_id_rozegranego(cache, e)
+                        r = rozlicz_zawodnika(cache, e, ev_espn, t["spec"]) if ev_espn else None
+                    except Exception as ex:
+                        print(f"  ESPN zawodnicy: błąd {ex}")
+                if r == "zwrot":
+                    t["zwrot"] = True              # zawodnik nie zagrał - zakład zwykle zwracany
+                    continue
+                if r is None:
+                    brak += 1
+                    brak_zaw += 1
+                else:
+                    t["traf"] = bool(r)
                 continue
             r = trafia(wiersz, e["h"], tuple(t["spec"]))
             if r is None:
@@ -1637,7 +1716,7 @@ def rozlicz_historie(historia, surowe, wyniki_fd, af, cache=None):
             else:
                 t["traf"] = bool(r)
         # pełne dane albo minęły 4 dni -> zamykamy
-        if not brak or teraz > st + timedelta(days=4) or zrodlo == "football-data":
+        if not brak or teraz > st + timedelta(days=4) or (zrodlo == "football-data" and not brak_zaw):
             e["koniec"] = True
     zapisane = sum(1 for e in historia.values() if start_meczu(e) and start_meczu(e) < teraz)
     print(f"Rozliczanie: zapisanych rozegranych meczów {zapisane}, do rozliczenia teraz {diag['do_rozliczenia']}, "
@@ -1703,7 +1782,7 @@ let DZ="",RY="";
 const ts=d=>{const [a,b,c]=d.split("/").map(Number);return new Date(c,b-1,a).getTime()};
 const daty=[...new Set(D.map(x=>x.d))].sort((a,b)=>ts(b)-ts(a));
 dni.innerHTML='<button class="chip on" data-d="">Wszystkie dni</button>'+daty.map(d=>`<button class="chip" data-d="${d}">${d.slice(0,5).replace("/",".")} (${D.filter(x=>x.d===d).length})</button>`).join("");
-const RN={"":"Wszystkie rynki",wynik:"Wynik",bramki:"Bramki",rozne:"Rożne",kartki:"Kartki",strzaly:"Strzały"};
+const RN={"":"Wszystkie rynki",wynik:"Wynik",bramki:"Bramki",rozne:"Rożne",kartki:"Kartki",strzaly:"Strzały",zaw:"Zawodnicy"};
 rynki.innerHTML=Object.entries(RN).map(([k,v])=>`<button class="chip${k?"":" on"}" data-r="${k}">${v}</button>`).join("");
 dni.onclick=e=>{const c=e.target.closest("[data-d]");if(!c)return;DZ=c.dataset.d;dni.querySelectorAll(".chip").forEach(b=>b.classList.toggle("on",b===c));rys()};
 rynki.onclick=e=>{const c=e.target.closest("[data-r]");if(!c)return;RY=c.dataset.r;rynki.querySelectorAll(".chip").forEach(b=>b.classList.toggle("on",b===c));rys()};
@@ -2011,7 +2090,7 @@ th{text-transform:none;font-size:12px;letter-spacing:0}
 .panel-ukryty{display:none!important}
 .labwrap{padding:10px 14px 14px;border-top:1px solid var(--lin)}.mecz.zw .labwrap{display:none}
 .labbtn{width:100%;padding:10px;border-radius:10px;border:1px dashed var(--lin);background:var(--bg);color:var(--txt);font:600 17px var(--cond);cursor:pointer}
-.lab{margin-top:12px}.lab .seg{display:flex;gap:6px;overflow-x:auto;margin-bottom:8px;scrollbar-width:none}
+.lab{margin-top:12px}.lab .seg{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
 .lab .seg button{flex:0 0 auto;font:600 15px var(--cond);padding:5px 12px;border-radius:999px;border:1px solid var(--lin);background:var(--bg);color:var(--txt);cursor:pointer}
 .lab .seg button.on{background:var(--amber);color:var(--amber-t);border-color:var(--amber)}
 .lab .linia{display:flex;align-items:center;justify-content:center;gap:14px;margin:12px 0 4px}
@@ -2028,6 +2107,8 @@ th{text-transform:none;font-size:12px;letter-spacing:0}
 .kropki{display:flex;gap:4px;align-items:flex-end;height:40px;position:relative}
 .kropki i{flex:1;max-width:28px;border-radius:3px 3px 0 0;background:#3a4f6d;cursor:pointer}.kropki i.t{background:var(--win)}
 .kropki i.wyb{outline:2px solid var(--amber);outline-offset:1px}
+.zsel{width:100%;margin:0 0 8px;font:600 15px var(--cond);padding:8px 10px;border-radius:10px;border:1px solid var(--lin);background:var(--bg);color:var(--txt)}
+.gw{background:none;border:0;font-size:20px;line-height:1;color:var(--mut);cursor:pointer;padding:2px 6px;margin-left:auto;margin-right:22px}.gw.on{color:#F2B33D}
 .kropki .lin{position:absolute;left:0;right:0;border-top:2px dashed var(--amber);pointer-events:none}
 .hist .r b{font:700 16px var(--cond);text-align:right}
 .barinfo{min-height:38px;background:var(--bg);border-radius:8px;padding:8px 10px;font-size:13px;color:var(--mut)}.barinfo b{color:var(--txt)}
@@ -2189,8 +2270,12 @@ return`<span class="st">${s[0]}/${s[1]}<span class="bar"><i style="width:${q*100
 const r=s=>s[1]?s[0]/s[1]:-1;
 const KLUCZ={p:x=>-x.p,t:x=>x.m.ts,kd:x=>-x.kurs,kr:x=>x.kurs,rd:x=>-(x.rynek||0),f:x=>-((r(x.fh)+r(x.fg))/2),h:x=>-r(x.h2h)};
 const sortuj=a=>a.sort((x,y)=>KLUCZ[sort.value](x)-KLUCZ[sort.value](y)||y.p-x.p);
-let RK="",DZIEN="";
-const pasujeKat=x=>(!liga.value||x.m.liga===liga.value)&&(!DZIEN||x.m.data===DZIEN)&&(!RK||x.rk===RK)&&(!kat.value||x.kat===kat.value||(kat.value==="druz"&&(x.kat==="gosp"||x.kat==="gosc")));
+let RK="",DZIEN="",TYLKO_UL=false,UL=new Set();
+try{UL=new Set(JSON.parse(localStorage.getItem("ulubione")||"[]"))}catch(e){}
+const mkey=m=>m.h+"|"+m.g+"|"+m.data;
+const brakTxt=()=>TYLKO_UL&&![...UL].some(k=>D.some(m=>mkey(m)===k))?'<p>Nie masz jeszcze ulubionych meczów. Dotknij &#9734; przy meczu, żeby go dodać.</p>':'<p>Brak typów przy tych filtrach.</p>';
+const zapiszUl=()=>{try{localStorage.setItem("ulubione",JSON.stringify([...UL].filter(k=>D.some(m=>mkey(m)===k))))}catch(e){}};
+const pasujeKat=x=>(!TYLKO_UL||UL.has(mkey(x.m)))&&(!liga.value||x.m.liga===liga.value)&&(!DZIEN||x.m.data===DZIEN)&&(!RK||x.rk===RK)&&(!kat.value||x.kat===kat.value||(kat.value==="druz"&&(x.kat==="gosp"||x.kat==="gosc")));
 // ligi: lista z liczbą meczów
 (()=>{const L={};D.forEach(m=>L[m.liga]=(L[m.liga]||0)+1);
 liga.innerHTML='<option value="">wszystkie</option>'+Object.keys(L).sort().map(l=>`<option value="${l}">${l} (${L[l]})</option>`).join("")})();
@@ -2202,9 +2287,14 @@ const daty=[...new Set(D.map(m=>m.data).filter(Boolean))].sort((a,b)=>ts(a)-ts(b
 const ety=d=>{const t=new Date(ts(d)),r=Math.round((t-dz)/864e5),dm=d.slice(0,5).replace("/",".");
 return r===0?`Dziś ${dm}`:r===1?`Jutro ${dm}`:`${DNI[t.getDay()]} ${dm}`};
 dni.innerHTML=`<button class="chip on" data-dz="">&#x1F4C5; Wszystkie dni</button>`+daty.map(d=>{
-const n=D.filter(m=>m.data===d).length;return`<button class="chip" data-dz="${d}">${ety(d)} <span style="opacity:.7">(${n})</span></button>`}).join("");
+const n=D.filter(m=>m.data===d).length;return`<button class="chip" data-dz="${d}">${ety(d)} <span style="opacity:.7">(${n})</span></button>`}).join("")+
+`<button class="chip" id="ulChip" aria-pressed="false">&#x2B50; Ulubione <span style="opacity:.7">(${[...UL].filter(k=>D.some(m=>mkey(m)===k)).length})</span></button>`;
+ulChip.addEventListener("click",()=>{TYLKO_UL=!TYLKO_UL;ulChip.classList.toggle("on",TYLKO_UL);ulChip.setAttribute("aria-pressed",TYLKO_UL);rys()});
 dni.addEventListener("click",e=>{const c=e.target.closest("[data-dz]");if(!c)return;DZIEN=c.dataset.dz;
-dni.querySelectorAll(".chip").forEach(b=>b.classList.toggle("on",b===c));rys()})})();
+dni.querySelectorAll("[data-dz]").forEach(b=>b.classList.toggle("on",b===c));rys()})})();
+lista.addEventListener("click",e=>{const b=e.target.closest("[data-ul]");if(!b)return;const k=b.dataset.ul;
+UL.has(k)?UL.delete(k):UL.add(k);zapiszUl();ulChip.querySelector("span").textContent=`(${[...UL].filter(k=>D.some(m=>mkey(m)===k)).length})`;
+if(TYLKO_UL)rys();else{b.classList.toggle("on",UL.has(k));b.innerHTML=UL.has(k)?"&#9733;":"&#9734;";b.setAttribute("aria-label",UL.has(k)?"Usuń z ulubionych":"Dodaj do ulubionych")}});
 chipy.addEventListener("click",e=>{const c=e.target.closest("[data-rk]");if(!c)return;RK=c.dataset.rk;
 chipy.querySelectorAll(".chip").forEach(b=>b.classList.toggle("on",b===c));rys()});
 function value(){const pod=vpod.checked?0.88:1,mn=(+vmin.value||0)/100,pm=+vpmin.value||0;
@@ -2223,13 +2313,13 @@ const ok=x=>pasujeKat(x)&&x.p>=mn&&(!v||x.value)&&(!mf||[x.fh,x.fg].every(s=>s[1
 const pasuje=m=>!q||(m.h+" "+m.g+" "+m.liga).toLowerCase().includes(q);
 if(razem.checked){const t=sortuj(D.filter(pasuje).flatMap(m=>m.typy.filter(ok)));
 lista.innerHTML=t.length?`<div class="mecz"><div class="wrap"><table><tr><th></th><th>Mecz</th><th>Typ</th><th>Prawd.</th><th>Uczciwy kurs</th><th>Kurs rynku</th><th>Forma gosp.</th><th>Forma gościa</th><th>H2H</th></tr>
-${t.map(x=>`<tr>${wiersz(x).replace("</td>",`</td><td class="c-m"><b>${x.m.h} &ndash; ${x.m.g}</b><br><span style="color:var(--mut);font-size:11px">${x.m.liga} &middot; ${x.m.data} ${x.m.godz}</span></td>`)}</tr>`).join("")}</table></div></div>`:'<p>Brak typów przy tych filtrach.</p>';return}
+${t.map(x=>`<tr>${wiersz(x).replace("</td>",`</td><td class="c-m"><b>${x.m.h} &ndash; ${x.m.g}</b><br><span style="color:var(--mut);font-size:11px">${x.m.liga} &middot; ${x.m.data} ${x.m.godz}</span></td>`)}</tr>`).join("")}</table></div></div>`:brakTxt();return}
 const mecze=D.filter(pasuje).map(m=>({m,t:sortuj(m.typy.filter(ok))})).filter(z=>z.t.length);
 if(sort.value!=="p")mecze.sort((a,b)=>KLUCZ[sort.value](a.t[0])-KLUCZ[sort.value](b.t[0]));
 for(const {m,t} of mecze){const mk=m.h+"|"+m.g+"|"+m.data,zw=ZWIN_DOM!==PRZEL.has(mk),naj=t[0];
 const xs_=m.lh+m.la||1;
 html+=`<div class="mecz${zw?" zw":""}" data-mk="${mk}"><div class="top"><span class="strz">${zw?"&#9656;":"&#9662;"}</span>
-<div class="meta"><span class="godz">${m.godz||"--:--"}</span><span>${m.data.slice(0,5).replace("/",".")}</span><span class="liga">${m.liga}</span></div>
+<div class="meta"><span class="godz">${m.godz||"--:--"}</span><span>${m.data.slice(0,5).replace("/",".")}</span><span class="liga">${m.liga}</span><button class="gw${UL.has(mk)?" on":""}" data-ul="${mk}" aria-label="${UL.has(mk)?"Usuń z ulubionych":"Dodaj do ulubionych"}">${UL.has(mk)?"&#9733;":"&#9734;"}</button></div>
 <div class="sb"><div class="t">${m.h}</div><div class="xg"><span class="h">${m.lh.toFixed(2)}</span><div class="xgbar"><i style="width:${(m.lh/xs_*100).toFixed(0)}%"></i></div><span class="a">${m.la.toFixed(2)}</span><div class="xgl">oczekiwane gole</div></div><div class="t t2">${m.g}</div></div>${m.p1x2?`
 <div class="wdl"><div class="wdlbar"><i class="w1" style="width:${m.p1x2[0]}%"></i><i class="wx" style="width:${m.p1x2[1]}%"></i><i class="w2" style="width:${m.p1x2[2]}%"></i></div>
 <div class="wdlt"><span><b class="h">${m.p1x2[0]}%</b> wygrana ${m.h}</span><span><b>${m.p1x2[1]}%</b> remis</span><span><b class="a">${m.p1x2[2]}%</b> wygrana ${m.g}</span></div></div>`:""}
@@ -2241,7 +2331,7 @@ html+=`<div class="mecz${zw?" zw":""}" data-mk="${mk}"><div class="top"><span cl
 ${t.map(x=>`<tr>${wiersz(x)}</tr>`).join("")}
 </table></div>${m.lab?`<div class="labwrap"><button class="labbtn" data-labopen="${mk}">&#x1F527; Sprawdź własną linię</button>
 <div class="lab${LABOTW.has(mk)?"":" panel-ukryty"}" data-lab="${mk}">${LABOTW.has(mk)?labHTML(m):""}</div></div>`:""}</div>`}
-lista.innerHTML=(html?`<div class="zwbar"><button class="kbt sz" id="zwAll">&#9656; Zwiń wszystkie</button><button class="kbt sz" id="rozAll">&#9662; Rozwiń wszystkie</button></div>`:"")+(html||'<p>Brak typów przy tych filtrach.</p>')}
+lista.innerHTML=(html?`<div class="zwbar"><button class="kbt sz" id="zwAll">&#9656; Zwiń wszystkie</button><button class="kbt sz" id="rozAll">&#9662; Rozwiń wszystkie</button></div>`:"")+(html||brakTxt())}
 const STAN=__STAN__;
 // zakładki
 const PANELE={mecze:["lista"],vb:["vb"],gen:["gen"],stan:["stan"]};
@@ -2286,6 +2376,34 @@ const hOwn=sr(col(m.lab.hh,i)),hOpp=sr(col(m.lab.hh,i+1)),aOwn=sr(col(m.lab.ha,i
 const lh=sr([hOwn,aOpp].filter(v=>v!=null)),la=sr([aOwn,hOpp].filter(v=>v!=null));
 return lh==null||la==null?null:{l:[lh,la],est:true}}
 const dostepne=m=>Object.keys(RYN).filter(r=>lamFor(m,r));
+// ---- własna linia dla zawodnika (wiersz: data, rywal, dom, gole, asysty, strzały, celne, kartki, faule, faulowany, minuty)
+const ZST={sh:["Strzały",5],sot:["Celne",6],gol:["Gole",3],as:["Asysty",4],kar:["Kartki",7],fc:["Faule",8],fs:["Faulowany",9]};
+const zawLista=m=>{const z=(m.lab&&m.lab.zaw)||{};return[...(z.H||[]).map((p,i)=>["H",i,p]),...(z.A||[]).map((p,i)=>["A",i,p])]};
+const zawGracz=(m,S)=>(m.lab.zaw[S.zp[0]]||[])[S.zp[1]];
+const zawLinia=(m,S)=>{S.zlin=Math.floor(sr(zawGracz(m,S)[1].map(r=>r[ZST[S.zs][1]])))+.5};
+function zawStart(m,S){const L=zawLista(m);if(!L.length)return false;if(!S.zp){
+const b=L.slice().sort((x,y)=>sr(y[2][1].map(r=>r[5]))-sr(x[2][1].map(r=>r[5])))[0];S.zp=[b[0],b[1]];S.zs="sh";zawLinia(m,S)}return true}
+const segRyn=(m,S)=>`<div class="seg">${Object.entries(RYN).filter(([r])=>lamFor(m,r)).map(([r,[n]])=>`<button class="${r===S.rk?"on":""}" data-lset="rk" data-v="${r}">${n}</button>`).join("")}${zawLista(m).length?`<button class="${S.rk==="zaw"?"on":""}" data-lset="rk" data-v="zaw">&#x1F464; Zawodnik</button>`:""}</div>`;
+function zawBarInfo(m,S,j){const g=zawGracz(m,S);if(j==null)return"Najedź albo dotknij słupka, żeby zobaczyć mecz.";const r=g[1][j],x=r[ZST[S.zs][1]];
+return`<b>${r[0]}</b> &middot; ${r[2]?"u siebie":"na wyjeździe"} z ${r[1]} &middot; ok. ${r[10]} min<br>${ZST[S.zs][0]}: <b>${x}</b> (${x>S.zlin?"powyżej":"poniżej"} ${S.zlin.toFixed(1)})`}
+function zawHTML(m,S){const [imie,rows]=zawGracz(m,S),i=ZST[S.zs][1],v=rows.map(r=>r[i]),lam=sr(v),tr=v.filter(x=>x>S.zlin).length;
+let p=.6*powyzej(S.zlin,lam)+.4*tr/v.length;p=Math.min(.98,Math.max(.02,p));const q=1-p,k=parseFloat(String(S.kurs).replace(",",".")),kq=parseFloat(String(S.kursq).replace(",","."));
+const ev=k>1?p*k-1:null,evq=kq>1?q*kq-1:null;
+const vb=e=>e==null?"":`<span class="${e>0?"valb":"m"}">${e>0?`VALUE +${(e*100).toFixed(0)}%`:`bez value (${(e*100).toFixed(0)}%)`}</span>`;
+const opcje=["H","A"].map(st=>(m.lab.zaw[st]||[]).length?`<optgroup label="${st==="H"?m.h:m.g}">${m.lab.zaw[st].map((g,j)=>`<option value="${st}|${j}"${S.zp[0]===st&&S.zp[1]===j?" selected":""}>${g[0]}</option>`).join("")}</optgroup>`:"").join("");
+const mx=Math.max(S.zlin+2,...v),druz=S.zp[0]==="H"?m.h:m.g;
+return`${segRyn(m,S)}<select class="zsel" data-zsel aria-label="Zawodnik">${opcje}</select>
+<div class="seg male">${Object.entries(ZST).map(([k_,[n]])=>`<button class="${k_===S.zs?"on":""}" data-zset="st" data-v="${k_}">${n}</button>`).join("")}</div>
+<div class="linia"><button data-zset="minus" aria-label="Zmniejsz linię">&minus;</button><span>${S.zlin.toFixed(1)}</span><button data-zset="plus" aria-label="Zwiększ linię">+</button></div>
+<p class="m" style="text-align:center;margin:0">średnio ${lam.toFixed(1)} na mecz &middot; ${imie} (${druz}) &middot; zakłada, że zagra</p>
+<div class="wyn"><div class="${p>=.5?"pow":""}"><b>${(p*100).toFixed(0)}%</b>powyżej ${S.zlin.toFixed(1)}<br><small>uczciwy kurs ${(1/p).toFixed(2)}</small></div>
+<div class="${q>.5?"pow":""}"><b>${(q*100).toFixed(0)}%</b>poniżej ${S.zlin.toFixed(1)}<br><small>uczciwy kurs ${(1/q).toFixed(2)}</small></div></div>
+<div class="kursl">Kurs u bukmachera: powyżej <input inputmode="decimal" data-lset="kurs" data-pole="kurs" value="${S.kurs}" placeholder="1.85"> ${vb(ev)}</div>
+<div class="kursl" style="margin-top:-6px">poniżej <input inputmode="decimal" data-lset="kurs" data-pole="kursq" value="${S.kursq}" placeholder="1.95"> ${vb(evq)}</div>
+<div class="hist"><div class="r"><span class="n">${imie}<br><small>ost. ${v.length}</small></span><div class="kropki">${rows.map((r,j)=>{const x=r[i];
+return`<i class="${x>S.zlin?"t":""}${S.zbar===j?" wyb":""}" title="${r[0]} ${r[2]?"u siebie":"wyjazd"} z ${r[1]} · ${ZST[S.zs][0].toLowerCase()}: ${x}" style="height:${Math.max(6,x/mx*100)}%" data-zbar="${j}"></i>`}).join("")}
+<div class="lin" style="bottom:${S.zlin/mx*100}%"></div></div><b>${tr}/${v.length}</b></div></div>
+<div class="barinfo m">${zawBarInfo(m,S,S.zbar)}</div>`}
 function labStan(m){const k=m.h+"|"+m.g+"|"+m.data;if(!LABST[k]){const rk=lamFor(m,"rozne")?"rozne":"gole";
 const L0=lamFor(m,rk).l,l=(L0[0]+L0[1]);LABST[k]={rk,cel:"mecz",lin:Math.floor(l)+.5,kurs:"",kursq:"",bar:null}}return LABST[k]}
 function barInfo(m,S,wb){wb=wb||S.bar;if(!wb)return"Najedź albo dotknij słupka, żeby zobaczyć mecz.";const [idx,j]=wb,rows=[m.lab.hh,m.lab.ha,m.lab.h2h][idx];
@@ -2295,7 +2413,7 @@ return`<b>${r[0]}</b> &middot; ${r[2]?`${druz} &ndash; ${r[1]}`:`${r[1]} &ndash;
 ${RYN[S.rk][0]}: ${druz} ${r[i]}, ${r[1]} ${r[i+1]} &rarr; liczone: <b>${v[1]}</b> (${v[1]>S.lin?"powyżej":"poniżej"} ${S.lin.toFixed(1)})`}
 function wartosc(r,rk,cel,swoja){const i=RYN[rk][1],own=r[i],opp=r[i+1];if(own==null||opp==null)return null;
 if(cel==="mecz")return own+opp;return swoja?own:opp}
-function labHTML(m){const S=labStan(m),LL=lamFor(m,S.rk),L1=LL.l,lamv=S.cel==="mecz"?L1[0]+L1[1]:L1[S.cel==="h"?0:1];
+function labHTML(m){if(labStan(m).rk==="zaw"&&zawStart(m,labStan(m)))return zawHTML(m,labStan(m));const S=labStan(m),LL=lamFor(m,S.rk),L1=LL.l,lamv=S.cel==="mecz"?L1[0]+L1[1]:L1[S.cel==="h"?0:1];
 let p=powyzej(S.lin,lamv);const kat=RYN[S.rk][2];p=kalibruj(p,kat);const q=1-p,k=parseFloat(String(S.kurs).replace(",",".")),kq=parseFloat(String(S.kursq).replace(",","."));
 const ev=k>1?p*k-1:null,evq=kq>1?q*kq-1:null;
 const vb=e=>e==null?"":`<span class="${e>0?"valb":"m"}">${e>0?`VALUE +${(e*100).toFixed(0)}%`:`bez value (${(e*100).toFixed(0)}%)`}</span>`;
@@ -2308,7 +2426,7 @@ const mx=Math.max(S.lin+2,...v.map(z=>z[1])),tr=v.filter(z=>z[1]>S.lin).length;
 return`<div class="r"><span class="n">${nazwa}<br><small>${pod}</small></span><div class="kropki">${v.map(([r,x],j)=>
 `<i class="${x>S.lin?"t":""}${S.bar&&S.bar[0]===idx&&S.bar[1]===j?" wyb":""}" title="${r[0]} ${r[2]?(idx===1?m.g:m.h)+" – "+r[1]:r[1]+" – "+(idx===1?m.g:m.h)} ${r[2]?r[3]+":"+r[4]:r[4]+":"+r[3]} · ${RYN[S.rk][0].toLowerCase()}: ${x}" style="height:${Math.max(6,x/mx*100)}%" data-bar="${idx}|${j}"></i>`).join("")}
 <div class="lin" style="bottom:${S.lin/mx*100}%"></div></div><b>${tr}/${v.length}</b></div>`};
-return`<div class="seg">${Object.entries(RYN).filter(([r])=>lamFor(m,r)).map(([r,[n]])=>`<button class="${r===S.rk?"on":""}" data-lset="rk" data-v="${r}">${n}</button>`).join("")}</div>
+return`${segRyn(m,S)}
 <div class="seg male">${Object.entries(kto).map(([c,n])=>`<button class="${c===S.cel?"on":""}" data-lset="cel" data-v="${c}">${n}</button>`).join("")}</div>
 <div class="linia"><button data-lset="minus" aria-label="Zmniejsz linię">&minus;</button><span>${S.lin.toFixed(1)}</span><button data-lset="plus" aria-label="Zwiększ linię">+</button></div>
 <p class="m" style="text-align:center;margin:0">oczekiwane: ${lamv.toFixed(1)} &middot; ${opis}</p>
@@ -2323,12 +2441,22 @@ lista.addEventListener("click",e=>{
 const o=e.target.closest("[data-labopen]");if(o){const k=o.dataset.labopen,box=o.parentElement.querySelector(".lab");
 if(LABOTW.has(k)){LABOTW.delete(k);box.classList.add("panel-ukryty")}else{LABOTW.add(k);box.innerHTML=labHTML(mByKey(k));box.classList.remove("panel-ukryty")}return}
 const b=e.target.closest("[data-lset]");if(b&&b.dataset.lset!=="kurs"){const box=b.closest("[data-lab]"),m=mByKey(box.dataset.lab),S=labStan(m);
-S.bar=null;if(b.dataset.lset==="rk"){S.rk=b.dataset.v;const L=lamFor(m,S.rk).l;S.lin=Math.floor(S.cel==="mecz"?L[0]+L[1]:L[S.cel==="h"?0:1])+.5}
+S.bar=null;S.zbar=null;if(b.dataset.lset==="rk"&&b.dataset.v==="zaw"){S.rk="zaw";zawStart(m,S)}
+else if(b.dataset.lset==="rk"){S.rk=b.dataset.v;const L=lamFor(m,S.rk).l;S.lin=Math.floor(S.cel==="mecz"?L[0]+L[1]:L[S.cel==="h"?0:1])+.5}
 else if(b.dataset.lset==="cel"){S.cel=b.dataset.v;const L=lamFor(m,S.rk).l;S.lin=Math.floor(S.cel==="mecz"?L[0]+L[1]:L[S.cel==="h"?0:1])+.5}
 else if(b.dataset.lset==="minus")S.lin=Math.max(.5,S.lin-1);else if(b.dataset.lset==="plus")S.lin+=1;
 box.innerHTML=labHTML(m);return}
+const zb=e.target.closest("[data-zset],[data-zbar]");if(zb){const box=zb.closest("[data-lab]"),m=mByKey(box.dataset.lab),S=labStan(m);
+if(zb.dataset.zbar!=null)S.zbar=+zb.dataset.zbar;else if(zb.dataset.zset==="st"){S.zs=zb.dataset.v;S.zbar=null;zawLinia(m,S)}
+else if(zb.dataset.zset==="minus")S.zlin=Math.max(.5,S.zlin-1);else S.zlin+=1;box.innerHTML=labHTML(m);return}
 const bar=e.target.closest("[data-bar]");if(bar){const box=bar.closest("[data-lab]"),m=mByKey(box.dataset.lab),S=labStan(m);
 S.bar=bar.dataset.bar.split("|").map(Number);box.innerHTML=labHTML(m)}});
+lista.addEventListener("change",e=>{const z=e.target.closest("[data-zsel]");if(!z)return;const box=z.closest("[data-lab]"),m=mByKey(box.dataset.lab),S=labStan(m);
+const [st,j]=z.value.split("|");S.zp=[st,+j];S.zbar=null;zawLinia(m,S);box.innerHTML=labHTML(m)});
+lista.addEventListener("mouseover",e=>{const zb=e.target.closest("[data-zbar]");if(zb){const box=zb.closest("[data-lab]"),m=mByKey(box.dataset.lab);
+box.querySelector(".barinfo").innerHTML=zawBarInfo(m,labStan(m),+zb.dataset.zbar);return}});
+lista.addEventListener("mouseout",e=>{const zb=e.target.closest("[data-zbar]");if(zb){const box=zb.closest("[data-lab]"),m=mByKey(box.dataset.lab),S=labStan(m);
+box.querySelector(".barinfo").innerHTML=zawBarInfo(m,S,S.zbar)}});
 lista.addEventListener("mouseover",e=>{const bar=e.target.closest("[data-bar]");if(!bar)return;
 const box=bar.closest("[data-lab]"),m=mByKey(box.dataset.lab),S=labStan(m);
 box.querySelector(".barinfo").innerHTML=barInfo(m,S,bar.dataset.bar.split("|").map(Number))});
@@ -2889,15 +3017,13 @@ def uruchom(a, otworz=True):
             k0 = (poprz.get(x["typ"]) or {}).get("k0") or (poprz.get(x["typ"]) or {}).get("kurs")
             if k0 and x.get("rynek") and abs(k0 - x["rynek"]) >= 0.01:
                 x["k0"] = k0
-        zapamietaj_typy(historia, kod, w, h, g, h_pokaz, g_pokaz, [
-            {"typ": x["typ"], "p": round(x["p"] / 100, 4), "kurs": x["rynek"], "rk": x["rk"], "spec": x["spec"],
-             "v": x["value"]}
-            for x in mecz_html["typy"] if x.get("spec")])
         zaw = None
         if kod in ESPN_LIGI and not a.dane:
             try:
-                zaw = zawodnicy_espn(cache, kod, w.get("Date"), h_pokaz, g_pokaz, pr["lam_h"], pr["lam_a"],
+                zaw, zlab = zawodnicy_espn(cache, kod, w.get("Date"), h_pokaz, g_pokaz, pr["lam_h"], pr["lam_a"],
                                       {h_pokaz: ligi_dom.get(h, []), g_pokaz: ligi_dom.get(g, [])})
+                if zlab and mecz_html.get("lab"):
+                    mecz_html["lab"]["zaw"] = zlab
             except Exception as e:
                 print(f"   [zawodnicy] ESPN: błąd {e}")
         if zaw is None and af and ile_zaw < a.zaw_max and not af.wyczerpane:
@@ -2907,6 +3033,10 @@ def uruchom(a, otworz=True):
             for x in zaw:
                 print(f"   {x['p']:5.1f}%  {x['typ']}  seria {x['seria']} | ostatnie {x['ost']}")
             mecz_html["typy"] += zaw
+        zapamietaj_typy(historia, kod, w, h, g, h_pokaz, g_pokaz, [
+            {"typ": x["typ"], "p": round(x["p"] / 100, 4), "kurs": x["rynek"], "rk": x["rk"], "spec": x["spec"],
+             "v": x["value"]}
+            for x in mecz_html["typy"] if x.get("spec")])
 
     if ESPN_ZAW["licznik"]:
         print(f"  [zawodnicy] ESPN: {ESPN_ZAW['licznik']} zapytań (bez limitu dziennego; mecze zapamiętywane)")
