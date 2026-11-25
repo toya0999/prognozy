@@ -935,7 +935,7 @@ def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=6):
         n_ok = sum(1 for i in ostatnie.get(t["id"], []) if ma_dane(i))
         if n_ok < 3:
             print(f"   [zawodnicy] {t['name']}: w bazie {n_ok} mecz(e) ze statystykami - potrzeba 3 (zbieram codziennie)")
-    typy_zaw = []
+    dane = []
     for t, lam, strona in druzyny:
         mecze = [af.cache.get(f"af|fx|{i}") for i in ostatnie.get(t["id"], [])]
         mecze = [m for m in mecze if m and m.get("players")]       # od najnowszego
@@ -947,8 +947,6 @@ def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=6):
                 continue
             dom = m["teams"]["home"]["id"] == t["id"]
             gole_druz.append(m["gole"].get("home" if dom else "away") or 0)
-        sr_gole = max(0.5, sum(gole_druz) / len(gole_druz)) if gole_druz else max(0.5, lam)
-        f_atak = min(1.6, max(0.6, lam / sr_gole))
         gracze = {}
         for m in mecze:
             for blok in m["players"]:
@@ -966,6 +964,18 @@ def zawodnicy_meczu(af, data, h, g, lam_h, lam_a, ile=6):
                         "min": mins, "gol": g_.get("total") or 0, "as": g_.get("assists") or 0,
                         "sot": sh.get("on") or 0, "sh": sh.get("total") or 0,
                         "kar": (c.get("yellow") or 0) + (c.get("red") or 0)})
+        dane.append((t["name"], lam, strona, gole_druz, gracze))
+    return typy_z_wystepow(h, g, dane)
+
+
+def typy_z_wystepow(h, g, dane):
+    """dane: [(nazwa drużyny, oczekiwane gole, 'H'/'A', gole drużyny w ost. meczach, {zawodnik: [występy od najnowszego]})]"""
+    import math
+    typy_zaw = []
+    for nazwa_druz, lam, strona, gole_druz, gracze in dane:
+        t = {"name": nazwa_druz}
+        sr_gole = max(0.5, sum(gole_druz) / len(gole_druz)) if gole_druz else max(0.5, lam)
+        f_atak = min(1.6, max(0.6, lam / sr_gole))
         for imie, wyst in gracze.items():
             if len(wyst) < 3 or sum(1 for w in wyst[:5] if w["min"] >= 45) < 3:
                 continue                       # tylko regularnie grający
@@ -1327,6 +1337,136 @@ def wynik_espn(cache, e):
     return None
 
 
+# ---------- ZAWODNICY Z ESPN (bez klucza, bez limitu dziennego) ----------
+ESPN_ZAW = {"licznik": 0, "limit": 450}
+
+
+def _espn(url):
+    ESPN_ZAW["licznik"] += 1
+    j, _ = pobierz_json(url)
+    return j
+
+
+def espn_ids_meczu(cache, kod, data, h, g):
+    """(slug ligi, id gospodarza, id gościa) w ESPN dla meczu z terminarza."""
+    liga = ESPN_LIGI.get(kod)
+    if not liga or not data:
+        return None
+    d = datetime.strptime(data, "%d/%m/%Y")
+    pasuje = lambda a, b: bool(znajdz(a, {normalizuj(b): 1}))
+    for dd in (d, d - timedelta(days=1), d + timedelta(days=1)):
+        k = f"espn|sb|{liga}|{dd:%Y%m%d}"
+        ev = cache.get(k, 12)
+        if ev is None:
+            if ESPN_ZAW["licznik"] >= ESPN_ZAW["limit"]:
+                return None
+            try:
+                j = _espn(f"{ESPN}/{liga}/scoreboard?dates={dd:%Y%m%d}")
+            except Exception:
+                continue
+            ev = []
+            for e in j.get("events", []):
+                c = {x.get("homeAway"): x["team"] for x in (e.get("competitions") or [{}])[0].get("competitors", [])}
+                if "home" in c and "away" in c:
+                    ev.append([c["home"]["id"], c["home"].get("displayName", ""), c["away"]["id"], c["away"].get("displayName", "")])
+            cache.set(k, ev)
+        traf = [e for e in ev if pasuje(h, e[1]) and pasuje(g, e[3])] or \
+               [e for e in ev if pasuje(h, e[1]) or pasuje(g, e[3])]
+        if len(traf) == 1:
+            return liga, traf[0][0], traf[0][2]
+    return None
+
+
+def espn_ostatnie(cache, ligi, tid, n=6):
+    """Ostatnie rozegrane mecze drużyny (w podanych rozgrywkach): [(data, id meczu, slug)] od najnowszego."""
+    wszystkie = {}
+    for liga in ligi:
+        k = f"espn|sch|{liga}|{tid}"
+        lst = cache.get(k, 12)
+        if lst is None:
+            if ESPN_ZAW["licznik"] >= ESPN_ZAW["limit"]:
+                lst = cache.get(k) or []
+            else:
+                try:
+                    j = _espn(f"{ESPN}/{liga}/teams/{tid}/schedule")
+                    lst = [[e["date"][:10], e["id"], liga] for e in j.get("events", [])
+                           if ((e.get("competitions") or [{}])[0].get("status") or {}).get("type", {}).get("completed")]
+                    cache.set(k, lst)
+                except Exception:
+                    lst = cache.get(k) or []
+        for x in lst:
+            wszystkie[x[1]] = x
+    return sorted(wszystkie.values(), reverse=True)[:n]
+
+
+def espn_gracze(cache, liga, ev_id):
+    """{id drużyny: {"gole": n, "gracze": {nazwisko: występ}}} z jednego meczu."""
+    k = f"espn|pl|{ev_id}"
+    d = cache.get(k)
+    if d is not None:
+        return d
+    if ESPN_ZAW["licznik"] >= ESPN_ZAW["limit"]:
+        return None
+    try:
+        j = _espn(f"{ESPN}/{liga}/summary?event={ev_id}")
+    except Exception:
+        return None
+    gole = {}
+    for c in ((j.get("header") or {}).get("competitions") or [{}])[0].get("competitors", []):
+        try:
+            gole[str(c.get("id") or c["team"]["id"])] = int(c.get("score"))
+        except (TypeError, ValueError, KeyError):
+            pass
+    d = {}
+    for t in j.get("rosters", []):
+        tid = str((t.get("team") or {}).get("id"))
+        gracze = {}
+        for p in t.get("roster", []):
+            st = {s_.get("name"): s_.get("value") or 0 for s_ in p.get("stats", [])}
+            if p.get("starter"):
+                mins = 65 if p.get("subbedOut") else 90
+            elif p.get("subbedIn"):
+                mins = 15 if p.get("subbedOut") else 25
+            else:
+                continue                     # nie grał
+            gracze[(p.get("athlete") or {}).get("displayName", "?")] = {
+                "min": mins, "gol": int(st.get("totalGoals", 0)), "as": int(st.get("goalAssists", 0)),
+                "sot": int(st.get("shotsOnTarget", 0)), "sh": int(st.get("totalShots", 0)),
+                "kar": int(st.get("yellowCards", 0)) + int(st.get("redCards", 0))}
+        if gracze:
+            d[tid] = {"gole": gole.get(tid), "gracze": gracze}
+    if d:
+        cache.set(k, d)
+    return d
+
+
+def zawodnicy_espn(cache, kod, data, h, g, lam_h, lam_a, ligi_dom=None, ile=6):
+    """Typy na zawodników z danych ESPN. None = ESPN nie zna tego meczu (wtedy próbujemy API-Football)."""
+    ids = espn_ids_meczu(cache, kod, data, h, g)
+    if not ids:
+        return None
+    liga, hid, gid = ids
+    ligi_dom = ligi_dom or {}
+    dane = []
+    for nazwa, tid, lam, strona in ((h, hid, lam_h, "H"), (g, gid, lam_a, "A")):
+        ligi = [liga] + [ESPN_LIGI[k] for k in ligi_dom.get(nazwa, []) if k in ESPN_LIGI and ESPN_LIGI[k] != liga]
+        gole_druz, gracze, n = [], {}, 0
+        for _, ev_id, sl in espn_ostatnie(cache, ligi, tid, ile):
+            m = espn_gracze(cache, sl, ev_id)
+            if not m or str(tid) not in m:
+                continue
+            n += 1
+            if m[str(tid)].get("gole") is not None:
+                gole_druz.append(m[str(tid)]["gole"])
+            for imie, w in m[str(tid)]["gracze"].items():
+                gracze.setdefault(imie, []).append(w)
+        if n < 3:
+            print(f"   [zawodnicy] {nazwa}: w ESPN {n} mecz(e) ze statystykami - za mało")
+            continue
+        dane.append((nazwa, lam, strona, gole_druz, gracze))
+    return typy_z_wystepow(h, g, dane)
+
+
 # ---------- DZIENNIK TYPÓW I ROZLICZENIE ----------
 def wczytaj_historie(sciezka):
     try:
@@ -1632,6 +1772,7 @@ def vapid_klucze(cache):
     """Para kluczy do powiadomień - tworzona raz i zapamiętywana."""
     k = cache.get("push|vapid")
     if k:
+        cache.set("push|vapid", k)            # odświeżamy datę, żeby sprzątanie po 40 dniach go nie usunęło
         return k
     try:
         import base64
@@ -2597,6 +2738,11 @@ def uruchom(a, otworz=True):
         kursy_api = kursy_odds_api(a.odds_key, sorted({w["Div"] for w in terminarz}), cache, a.kursy_co)
     af = ApiFootball(a.af_key, cache) if a.af_key else None
     ile_zaw = 0
+    ligi_dom = {}                                    # drużyna -> jej liga krajowa (do statystyk zawodników z pucharów)
+    for kod_, mod_ in modele.items():
+        if kod_ not in PUCHARY:
+            for d_ in mod_.dom:
+                ligi_dom.setdefault(d_, []).append(kod_)
     if af and terminarz:
         try:
             zbieraj_zawodnikow(af, terminarz, [d for kod in modele for d in modele[kod].dom])
@@ -2744,9 +2890,17 @@ def uruchom(a, otworz=True):
             {"typ": x["typ"], "p": round(x["p"] / 100, 4), "kurs": x["rynek"], "rk": x["rk"], "spec": x["spec"],
              "v": x["value"]}
             for x in mecz_html["typy"] if x.get("spec")])
-        if af and ile_zaw < a.zaw_max and not af.wyczerpane:
+        zaw = None
+        if kod in ESPN_LIGI and not a.dane:
+            try:
+                zaw = zawodnicy_espn(cache, kod, w.get("Date"), h_pokaz, g_pokaz, pr["lam_h"], pr["lam_a"],
+                                      {h_pokaz: ligi_dom.get(h, []), g_pokaz: ligi_dom.get(g, [])})
+            except Exception as e:
+                print(f"   [zawodnicy] ESPN: błąd {e}")
+        if zaw is None and af and ile_zaw < a.zaw_max and not af.wyczerpane:
             ile_zaw += 1
             zaw = zawodnicy_meczu(af, w.get("Date"), h_pokaz, g_pokaz, pr["lam_h"], pr["lam_a"])
+        if zaw:
             for x in zaw:
                 print(f"   {x['p']:5.1f}%  {x['typ']}  seria {x['seria']} | ostatnie {x['ost']}")
             mecz_html["typy"] += zaw
