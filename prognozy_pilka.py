@@ -1338,7 +1338,7 @@ def wynik_espn(cache, e):
 
 
 # ---------- ZAWODNICY Z ESPN (bez klucza, bez limitu dziennego) ----------
-ESPN_ZAW = {"licznik": 0, "limit": 450}
+ESPN_ZAW = {"licznik": 0, "limit": 1500}
 
 
 def _espn(url):
@@ -1461,7 +1461,9 @@ def zawodnicy_espn(cache, kod, data, h, g, lam_h, lam_a, ligi_dom=None, ile=6):
             for imie, w in m[str(tid)]["gracze"].items():
                 gracze.setdefault(imie, []).append(w)
         if n < 3:
-            print(f"   [zawodnicy] {nazwa}: w ESPN {n} mecz(e) ze statystykami - za mało")
+            pow_ = "limit zapytań na to odświeżenie - dobierze następnym razem" \
+                if ESPN_ZAW["licznik"] >= ESPN_ZAW["limit"] else "za mało"
+            print(f"   [zawodnicy] {nazwa}: w ESPN {n} mecz(e) ze statystykami - {pow_}")
             continue
         dane.append((nazwa, lam, strona, gole_druz, gracze))
     return typy_z_wystepow(h, g, dane)
@@ -2905,6 +2907,8 @@ def uruchom(a, otworz=True):
                 print(f"   {x['p']:5.1f}%  {x['typ']}  seria {x['seria']} | ostatnie {x['ost']}")
             mecz_html["typy"] += zaw
 
+    if ESPN_ZAW["licznik"]:
+        print(f"  [zawodnicy] ESPN: {ESPN_ZAW['licznik']} zapytań (bez limitu dziennego; mecze zapamiętywane)")
     if os.environ.get("PUSH_SUB"):
         dzis_p = datetime.now().strftime("%Y-%m-%d")
         if a.push_teraz or (datetime.now().hour >= a.push_godzina and cache.get("push|wyslano") != dzis_p):
