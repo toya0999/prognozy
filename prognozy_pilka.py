@@ -2254,7 +2254,8 @@ if(b.dataset.tab==="vb")vb.open=true;if(b.dataset.tab==="gen")gen.open=true;scro
 (()=>{const dz=new Date(),d=`${String(dz.getDate()).padStart(2,"0")}/${String(dz.getMonth()+1).padStart(2,"0")}/${dz.getFullYear()}`;
 const dzis=D.filter(m=>m.data===d).length,pewne=D.reduce((s,m)=>s+m.typy.filter(x=>x.p>=80&&x.kat!=="zaw").length,0),
 val=D.reduce((s,m)=>s+m.typy.filter(x=>x.value).length,0);
-kpi.innerHTML=`<span><b>${D.length}</b>meczów (dziś ${dzis})</span><span><b>${pewne}</b>typów od 80%</span><span><b>${val}</b>value betów</span>`+
+const odm=(n,a,b,c)=>n===1?a:(n%10>=2&&n%10<=4&&(n%100<10||n%100>=20)?b:c);
+kpi.innerHTML=`<span><b>${D.length}</b>${odm(D.length,"mecz","mecze","meczów")} (dziś ${dzis})</span><span><b>${pewne}</b>${odm(pewne,"typ","typy","typów")} od 80%</span><span><b>${val}</b>${odm(val,"value bet","value bety","value betów")}</span>`+
 (STAN.wczoraj?`<span><b>${STAN.wczoraj[0]}/${STAN.wczoraj[1]}</b>wczoraj weszło</span>`:"")})();
 // stan danych
 (()=>{const z=(ok,t)=>`<span class="${ok?"ok":"zle"}">${ok?"&#10003;":"&#10007;"}</span> ${t}`;
