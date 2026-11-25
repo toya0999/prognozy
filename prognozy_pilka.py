@@ -2134,16 +2134,24 @@ const powyzej=(lin,l)=>{let s=0;for(let k=0;k<=Math.floor(lin);k++)s+=pois(k,l);
 const RYN={gole:["Gole",3,"bramki"],rozne:["Rożne",5,"rozne"],kartki:["Kartki",7,"kartki"],strzaly:["Strzały",9,"strzaly"],celne:["Celne",11,"strzaly"]};
 const LABOTW=new Set(),LABST={};
 const mByKey=k=>D.find(m=>m.h+"|"+m.g+"|"+m.data===k);
-function labStan(m){const k=m.h+"|"+m.g+"|"+m.data;if(!LABST[k]){const rk=m.lab.lam.rozne?"rozne":"gole";
-const l=(m.lab.lam[rk][0]+m.lab.lam[rk][1]);LABST[k]={rk,cel:"mecz",lin:Math.floor(l)+.5,kurs:"",kursq:"",bar:null}}return LABST[k]}
-function barInfo(m,S){if(!S.bar)return"Dotknij słupka, żeby zobaczyć mecz.";const [idx,j]=S.bar,rows=[m.lab.hh,m.lab.ha,m.lab.h2h][idx];
+const sr=a=>a.length?a.reduce((s,x)=>s+x,0)/a.length:null;
+// oczekiwane wartości: z modelu albo (gdy go brak) z historii znanej drużyny
+function lamFor(m,rk){const L=m.lab.lam[rk];if(L)return{l:L,est:false};const i=RYN[rk][1];
+const col=(rows,c)=>rows.map(r=>r[c]).filter(v=>v!=null);
+const hOwn=sr(col(m.lab.hh,i)),hOpp=sr(col(m.lab.hh,i+1)),aOwn=sr(col(m.lab.ha,i)),aOpp=sr(col(m.lab.ha,i+1));
+const lh=sr([hOwn,aOpp].filter(v=>v!=null)),la=sr([aOwn,hOpp].filter(v=>v!=null));
+return lh==null||la==null?null:{l:[lh,la],est:true}}
+const dostepne=m=>Object.keys(RYN).filter(r=>lamFor(m,r));
+function labStan(m){const k=m.h+"|"+m.g+"|"+m.data;if(!LABST[k]){const rk=lamFor(m,"rozne")?"rozne":"gole";
+const L0=lamFor(m,rk).l,l=(L0[0]+L0[1]);LABST[k]={rk,cel:"mecz",lin:Math.floor(l)+.5,kurs:"",kursq:"",bar:null}}return LABST[k]}
+function barInfo(m,S,wb){wb=wb||S.bar;if(!wb)return"Najedź albo dotknij słupka, żeby zobaczyć mecz.";const [idx,j]=wb,rows=[m.lab.hh,m.lab.ha,m.lab.h2h][idx];
 const swoja=idx===1?(S.cel==="a"||S.cel==="mecz"):(S.cel!=="a");const v=rows.map(r=>[r,wartosc(r,S.rk,S.cel,swoja)]).filter(z=>z[1]!=null)[j];
 if(!v)return"Dotknij słupka, żeby zobaczyć mecz.";const r=v[0],i=RYN[S.rk][1],druz=idx===1?m.g:m.h,gole=r[2]?`${r[3]}:${r[4]}`:`${r[4]}:${r[3]}`;
 return`<b>${r[0]}</b> &middot; ${r[2]?`${druz} &ndash; ${r[1]}`:`${r[1]} &ndash; ${druz}`} <b>${gole}</b><br>
 ${RYN[S.rk][0]}: ${druz} ${r[i]}, ${r[1]} ${r[i+1]} &rarr; liczone: <b>${v[1]}</b> (${v[1]>S.lin?"powyżej":"poniżej"} ${S.lin.toFixed(1)})`}
 function wartosc(r,rk,cel,swoja){const i=RYN[rk][1],own=r[i],opp=r[i+1];if(own==null||opp==null)return null;
 if(cel==="mecz")return own+opp;return swoja?own:opp}
-function labHTML(m){const S=labStan(m),L=m.lab.lam,lamv=S.cel==="mecz"?L[S.rk][0]+L[S.rk][1]:L[S.rk][S.cel==="h"?0:1];
+function labHTML(m){const S=labStan(m),LL=lamFor(m,S.rk),L1=LL.l,lamv=S.cel==="mecz"?L1[0]+L1[1]:L1[S.cel==="h"?0:1];
 let p=powyzej(S.lin,lamv);const kat=RYN[S.rk][2];p=kalibruj(p,kat);const q=1-p,k=parseFloat(String(S.kurs).replace(",",".")),kq=parseFloat(String(S.kursq).replace(",","."));
 const ev=k>1?p*k-1:null,evq=kq>1?q*kq-1:null;
 const vb=e=>e==null?"":`<span class="${e>0?"valb":"m"}">${e>0?`VALUE +${(e*100).toFixed(0)}%`:`bez value (${(e*100).toFixed(0)}%)`}</span>`;
@@ -2154,12 +2162,13 @@ const pasek=(nazwa,pod,rows,swoja,idx)=>{const v=rows.map(r=>[r,wartosc(r,S.rk,S
 if(!v.length)return`<div class="r"><span class="n">${nazwa}<br><small>${pod}</small></span><span class="m">brak danych</span><b>-</b></div>`;
 const mx=Math.max(S.lin+2,...v.map(z=>z[1])),tr=v.filter(z=>z[1]>S.lin).length;
 return`<div class="r"><span class="n">${nazwa}<br><small>${pod}</small></span><div class="kropki">${v.map(([r,x],j)=>
-`<i class="${x>S.lin?"t":""}${S.bar&&S.bar[0]===idx&&S.bar[1]===j?" wyb":""}" style="height:${Math.max(6,x/mx*100)}%" data-bar="${idx}|${j}"></i>`).join("")}
+`<i class="${x>S.lin?"t":""}${S.bar&&S.bar[0]===idx&&S.bar[1]===j?" wyb":""}" title="${r[0]} ${r[2]?(idx===1?m.g:m.h)+" – "+r[1]:r[1]+" – "+(idx===1?m.g:m.h)} ${r[2]?r[3]+":"+r[4]:r[4]+":"+r[3]} · ${RYN[S.rk][0].toLowerCase()}: ${x}" style="height:${Math.max(6,x/mx*100)}%" data-bar="${idx}|${j}"></i>`).join("")}
 <div class="lin" style="bottom:${S.lin/mx*100}%"></div></div><b>${tr}/${v.length}</b></div>`};
-return`<div class="seg">${Object.entries(RYN).filter(([r])=>L[r]).map(([r,[n]])=>`<button class="${r===S.rk?"on":""}" data-lset="rk" data-v="${r}">${n}</button>`).join("")}</div>
+return`<div class="seg">${Object.entries(RYN).filter(([r])=>lamFor(m,r)).map(([r,[n]])=>`<button class="${r===S.rk?"on":""}" data-lset="rk" data-v="${r}">${n}</button>`).join("")}</div>
 <div class="seg male">${Object.entries(kto).map(([c,n])=>`<button class="${c===S.cel?"on":""}" data-lset="cel" data-v="${c}">${n}</button>`).join("")}</div>
 <div class="linia"><button data-lset="minus" aria-label="Zmniejsz linię">&minus;</button><span>${S.lin.toFixed(1)}</span><button data-lset="plus" aria-label="Zwiększ linię">+</button></div>
 <p class="m" style="text-align:center;margin:0">oczekiwane: ${lamv.toFixed(1)} &middot; ${opis}</p>
+${LL.est?`<p class="m" style="text-align:center;margin:4px 0 0">&#x2139;&#xFE0F; szacunek tylko z historii ${m.lab.hh.length?m.h:m.g} &mdash; drugiej drużyny nie ma w danych</p>`:""}
 <div class="wyn"><div class="${p>=.5?"pow":""}"><b>${(p*100).toFixed(0)}%</b>powyżej ${S.lin.toFixed(1)}<br><small>uczciwy kurs ${(1/p).toFixed(2)}</small></div>
 <div class="${q>.5?"pow":""}"><b>${(q*100).toFixed(0)}%</b>poniżej ${S.lin.toFixed(1)}<br><small>uczciwy kurs ${(1/q).toFixed(2)}</small></div></div>
 <div class="kursl">Kurs u bukmachera: powyżej <input inputmode="decimal" data-lset="kurs" data-pole="kurs" value="${S.kurs}" placeholder="1.85"> ${vb(ev)}</div>
@@ -2170,12 +2179,17 @@ lista.addEventListener("click",e=>{
 const o=e.target.closest("[data-labopen]");if(o){const k=o.dataset.labopen,box=o.parentElement.querySelector(".lab");
 if(LABOTW.has(k)){LABOTW.delete(k);box.classList.add("panel-ukryty")}else{LABOTW.add(k);box.innerHTML=labHTML(mByKey(k));box.classList.remove("panel-ukryty")}return}
 const b=e.target.closest("[data-lset]");if(b&&b.dataset.lset!=="kurs"){const box=b.closest("[data-lab]"),m=mByKey(box.dataset.lab),S=labStan(m);
-S.bar=null;if(b.dataset.lset==="rk"){S.rk=b.dataset.v;const L=m.lab.lam[S.rk];S.lin=Math.floor(S.cel==="mecz"?L[0]+L[1]:L[S.cel==="h"?0:1])+.5}
-else if(b.dataset.lset==="cel"){S.cel=b.dataset.v;const L=m.lab.lam[S.rk];S.lin=Math.floor(S.cel==="mecz"?L[0]+L[1]:L[S.cel==="h"?0:1])+.5}
+S.bar=null;if(b.dataset.lset==="rk"){S.rk=b.dataset.v;const L=lamFor(m,S.rk).l;S.lin=Math.floor(S.cel==="mecz"?L[0]+L[1]:L[S.cel==="h"?0:1])+.5}
+else if(b.dataset.lset==="cel"){S.cel=b.dataset.v;const L=lamFor(m,S.rk).l;S.lin=Math.floor(S.cel==="mecz"?L[0]+L[1]:L[S.cel==="h"?0:1])+.5}
 else if(b.dataset.lset==="minus")S.lin=Math.max(.5,S.lin-1);else if(b.dataset.lset==="plus")S.lin+=1;
 box.innerHTML=labHTML(m);return}
 const bar=e.target.closest("[data-bar]");if(bar){const box=bar.closest("[data-lab]"),m=mByKey(box.dataset.lab),S=labStan(m);
 S.bar=bar.dataset.bar.split("|").map(Number);box.innerHTML=labHTML(m)}});
+lista.addEventListener("mouseover",e=>{const bar=e.target.closest("[data-bar]");if(!bar)return;
+const box=bar.closest("[data-lab]"),m=mByKey(box.dataset.lab),S=labStan(m);
+box.querySelector(".barinfo").innerHTML=barInfo(m,S,bar.dataset.bar.split("|").map(Number))});
+lista.addEventListener("mouseout",e=>{const bar=e.target.closest("[data-bar]");if(!bar)return;
+const box=bar.closest("[data-lab]"),m=mByKey(box.dataset.lab);box.querySelector(".barinfo").innerHTML=barInfo(m,labStan(m))});
 lista.addEventListener("input",e=>{const i=e.target.closest('[data-lset="kurs"]');if(!i)return;const box=i.closest("[data-lab]"),m=mByKey(box.dataset.lab);
 const pole=i.dataset.pole||"kurs";labStan(m)[pole]=i.value;const pos=i.selectionStart;box.innerHTML=labHTML(m);const n=box.querySelector(`[data-pole="${pole}"]`);n.focus();try{n.setSelectionRange(pos,pos)}catch(x){}});
 let ZWIN_DOM=innerWidth<=640;const PRZEL=new Set();
