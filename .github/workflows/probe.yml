@@ -9,14 +9,20 @@ jobs:
           import json,urllib.request
           def g(u): return json.load(urllib.request.urlopen(urllib.request.Request(u,headers={"User-Agent":"Mozilla/5.0"}),timeout=20))
           E="https://site.api.espn.com/apis/site/v2/sports/soccer"
-          for lg in ["eng.1","eng.2","esp.1","ita.1","ger.1","fra.1","ned.1","por.1","bel.1","tur.1","sco.1","gre.1","pol.1","pol.ekstraklasa","arg.1","bra.1","aut.1","den.1","sui.1","nor.1","swe.1","rou.1","uefa.champions","uefa.europa","uefa.europa.conf"]:
-              try:
-                  sb=g(f"{E}/{lg}/scoreboard?dates=20261122"); print(lg,"OK",len(sb.get("events",[])),sb.get("leagues",[{}])[0].get("name"))
-              except Exception as e:
-                  print(lg,"ERR",e)
-          import re
-          for lg in ["pol.1"]:
-              for u in (f"{E}/{lg}/scoreboard", f"{E}/{lg}/teams"):
-                  try: j=g(u); print(u,"OK",str(j)[:200])
-                  except Exception as e: print(u,"ERR",e)
+          C="https://sports.core.api.espn.com/v2/sports/soccer/leagues"
+          for lg,d in (("eng.1","20261122"),("esp.1","20261122")):
+              sb=g(f"{E}/{lg}/scoreboard?dates={d}")
+              ev=[e for e in sb["events"] if e["status"]["type"].get("completed")][0]
+              j=g(f"{E}/{lg}/summary?event={ev['id']}")
+              t=j["rosters"][0]; tid=t["team"]["id"]
+              gr=[p for p in t["roster"] if p.get("starter")][3]
+              aid=gr["athlete"]["id"]; print(lg,ev["name"],gr["athlete"]["displayName"],aid)
+              for u in (f"{C}/{lg}/events/{ev['id']}/competitions/{ev['id']}/competitors/{tid}/roster/{aid}/statistics/0",
+                        f"{C}/{lg}/events/{ev['id']}/competitions/{ev['id']}/competitors/{tid}/roster"):
+                  try:
+                      r=g(u); print(" OK",u.split("competitors")[1])
+                      for c in r.get("splits",{}).get("categories",[]):
+                          print("   ",c.get("name"),[(x["name"],x.get("value")) for x in c.get("stats",[])])
+                      if "entries" in r: print("   entries",len(r["entries"]),json.dumps(r["entries"][0])[:400])
+                  except Exception as e: print(" ERR",u.split("competitors")[1],e)
           PY
