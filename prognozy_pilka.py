@@ -1205,6 +1205,98 @@ w dużej mierze zależy od szczęścia.</p></div>
     return sciezka_html
 
 
+# ---------- WYNIKI Z ESPN (bez klucza, bez limitów) ----------
+ESPN_LIGI = {"E0": "eng.1", "E1": "eng.2", "SP1": "esp.1", "I1": "ita.1", "D1": "ger.1", "F1": "fra.1",
+             "N1": "ned.1", "P1": "por.1", "B1": "bel.1", "T1": "tur.1", "SC0": "sco.1", "G1": "gre.1",
+             "POL": "pol.1", "ARG": "arg.1", "BRA": "bra.1", "AUT": "aut.1", "DNK": "den.1", "SWZ": "sui.1",
+             "NOR": "nor.1", "SWE": "swe.1", "ROU": "rou.1", "LM": "uefa.champions", "LE": "uefa.europa",
+             "LK": "uefa.europa.conf"}
+ESPN = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+
+
+def espn_mecze(cache, kod, dzien):
+    """Rozegrane mecze ligi z danego dnia (dzień lokalny; pytamy też o dzień wcześniej - ESPN liczy w UTC)."""
+    liga = ESPN_LIGI.get(kod)
+    if not liga:
+        return []
+    d = datetime.strptime(dzien, "%d/%m/%Y")
+    zakres = f"{(d - timedelta(days=1)):%Y%m%d}-{(d + timedelta(days=1)):%Y%m%d}"
+    k = f"espn|{liga}|{zakres}"
+    dane = cache.get(k, 1)
+    if dane is None:
+        try:
+            j, _ = pobierz_json(f"{ESPN}/{liga}/scoreboard?dates={zakres}&limit=300")
+        except Exception as e:
+            print(f"  ESPN {liga}: nie pobrano ({e})")
+            return cache.get(k) or []
+        dane = []
+        for ev in j.get("events", []):
+            for c in ev.get("competitions", [])[:1]:
+                st = ((c.get("status") or ev.get("status") or {}).get("type") or {})
+                druz = {x.get("homeAway"): x for x in c.get("competitors", [])}
+                if "home" not in druz or "away" not in druz:
+                    continue
+                dane.append({"id": ev.get("id"), "h": druz["home"]["team"].get("displayName", ""),
+                             "g": druz["away"]["team"].get("displayName", ""),
+                             "hg": druz["home"].get("score"), "ag": druz["away"].get("score"),
+                             "koniec": st.get("state") == "post" or bool(st.get("completed"))})
+        cache.set(k, dane)
+    return dane
+
+
+def espn_statystyki(cache, kod, ev_id):
+    k = f"espn|st|{ev_id}"
+    st = cache.get(k)
+    if st:
+        return st
+    try:
+        j, _ = pobierz_json(f"{ESPN}/{ESPN_LIGI[kod]}/summary?event={ev_id}")
+    except Exception:
+        return {}
+    st = {}
+    for t in (j.get("boxscore") or {}).get("teams", []):
+        strona = "H" if t.get("homeAway") == "home" else "A"
+        for s_ in t.get("statistics", []):
+            n = f'{s_.get("name", "")} {s_.get("label", "")}'.lower()
+            try:
+                v = float(str(s_.get("displayValue", "")).split()[0].replace("%", ""))
+            except (ValueError, IndexError):
+                continue
+            if "corner" in n:
+                kl = "C"
+            elif "yellow" in n:
+                kl = "Y"
+            elif "red" in n and "card" in n:
+                kl = "R"
+            elif "ontarget" in n.replace(" ", "") or "on goal" in n or "on target" in n:
+                kl = "ST"
+            elif ("shots" in n or "totalshots" in n) and "blocked" not in n and "off" not in n:
+                kl = "S"
+            else:
+                continue
+            st[("H" if strona == "H" else "A") + kl] = int(v)
+    if st:
+        cache.set(k, st)
+    return st
+
+
+def wynik_espn(cache, e):
+    for m in espn_mecze(cache, e["kod"], e["data"]):
+        if not m["koniec"] or m["hg"] in (None, "") or m["ag"] in (None, ""):
+            continue
+        if znajdz(e["hp"], {normalizuj(m["h"]): 1}) and znajdz(e["gp"], {normalizuj(m["g"]): 1}):
+            w = {"FTHG": m["hg"], "FTAG": m["ag"]}
+            st = espn_statystyki(cache, e["kod"], m["id"])
+            for kl, col in (("C", "C"), ("Y", "Y"), ("R", "R"), ("S", "S"), ("ST", "ST")):
+                for strona in ("H", "A"):
+                    if strona + kl in st:
+                        w[strona + col] = st[strona + kl]
+            if "HY" in w and "HR" not in w:
+                w["HR"], w["AR"] = 0, 0
+            return w
+    return None
+
+
 # ---------- DZIENNIK TYPÓW I ROZLICZENIE ----------
 def wczytaj_historie(sciezka):
     try:
@@ -1288,7 +1380,9 @@ def statystyki_af(af, e):
     if not mecz:
         print(f"   [rozliczenie] API-Football: nie znaleziono {e['hp']} - {e['gp']} ({len(lista)} meczów {dzien})")
         return None
-    if ((mecz.get("fixture", {}).get("status", {}) or {}).get("short") not in ("FT", "AET", "PEN")):
+    stat = (mecz.get("fixture", {}).get("status", {}) or {}).get("short")
+    if stat not in ("FT", "AET", "PEN"):
+        print(f"   [rozliczenie] API-Football: {e['hp']} - {e['gp']} ma status {stat}")
         return None
     w = {"FTHG": (mecz.get("goals") or {}).get("home"), "FTAG": (mecz.get("goals") or {}).get("away")}
     ks = f"af|st|{mecz['fixture']['id']}"
@@ -1307,11 +1401,11 @@ def statystyki_af(af, e):
     return w
 
 
-def rozlicz_historie(historia, surowe, wyniki_fd, af):
+def rozlicz_historie(historia, surowe, wyniki_fd, af, cache=None):
     """Uzupełnia wynik i trafienia typów w zapisanych meczach."""
     teraz = datetime.now()
     ile_af = 0
-    diag = {"do_rozliczenia": 0, "football-data": 0, "API-Football": 0, "fixturedownload": 0, "brak": 0}
+    diag = {"do_rozliczenia": 0, "football-data": 0, "ESPN": 0, "API-Football": 0, "fixturedownload": 0, "brak": 0}
     brakujace = []
     for e in historia.values():
         if e.get("koniec"):
@@ -1328,7 +1422,16 @@ def rozlicz_historie(historia, surowe, wyniki_fd, af):
                     and normalizuj(x["AwayTeam"]) == normalizuj(e["g"])):
                 wiersz, zrodlo = dict(x), "football-data"
                 break
-        # 2) API-Football: wynik + rożne/kartki/strzały
+        # 2) ESPN: wynik + rożne/kartki/strzały (bez klucza)
+        if not wiersz and cache is not None:
+            try:
+                s_ = wynik_espn(cache, e)
+            except Exception as ex:
+                s_ = None
+                print(f"  ESPN: błąd {ex}")
+            if s_:
+                wiersz, zrodlo = s_, "ESPN"
+        # 3) API-Football: wynik + rożne/kartki/strzały
         if not wiersz and af and not af.wyczerpane and ile_af < 25:
             ile_af += 1
             s = statystyki_af(af, e)
@@ -1366,7 +1469,7 @@ def rozlicz_historie(historia, surowe, wyniki_fd, af):
             e["koniec"] = True
     zapisane = sum(1 for e in historia.values() if start_meczu(e) and start_meczu(e) < teraz)
     print(f"Rozliczanie: zapisanych rozegranych meczów {zapisane}, do rozliczenia teraz {diag['do_rozliczenia']}, "
-          f"wyniki z: football-data {diag['football-data']}, API-Football {diag['API-Football']}, "
+          f"wyniki z: football-data {diag['football-data']}, ESPN {diag['ESPN']}, API-Football {diag['API-Football']}, "
           f"fixturedownload {diag['fixturedownload']}; bez wyniku {diag['brak']}"
           + (f" (np. {'; '.join(brakujace)})" if brakujace else "")
           + ("" if af else " | brak klucza API-Football") + (" | limit API-Football wyczerpany" if af and af.wyczerpane else ""))
@@ -2396,7 +2499,7 @@ def uruchom(a, otworz=True):
             slug = PUCHARY.get(kod) or TERMINARZ_FD.get(kod)
             if slug:
                 wyniki_fd[kod] = wyniki_fixturedownload(laduj_tekst, f"{slug}-{rok_fd}")
-        rozlicz_historie(historia, surowe, wyniki_fd, af)
+        rozlicz_historie(historia, surowe, wyniki_fd, af, cache)
     wiersze_out, mecze_html = [], []
     for w in terminarz:
         kod = w["Div"]
