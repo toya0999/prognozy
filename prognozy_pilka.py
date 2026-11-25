@@ -521,6 +521,18 @@ def skutecznosc(mecze, druzyna, spec, odwroc=False):
     return (sum(wyn), len(wyn)) if wyn else (0, 0)
 
 
+def wiersz_lab(w, druz):
+    """Jeden mecz do „Sprawdź własną linię”: [data, rywal, u siebie, gole swoje/rywala, rożne, kartki, strzały, celne]."""
+    gosp = w["HomeTeam"].strip() == druz
+    rywal = (w["AwayTeam"] if gosp else w["HomeTeam"]).strip()
+    r = [data_meczu(w).strftime("%d.%m.%y"), rywal, 1 if gosp else 0]
+    for co in ("gole", "rozne", "kartki", "strzaly", "celne"):
+        for strona in (gosp, not gosp):
+            v = wart_strona(w, co, strona)
+            r.append(None if v is None else int(v))
+    return r
+
+
 def ostatnie_mecze(liga, druzyna, n):
     if liga is None:
         return []
@@ -1854,6 +1866,28 @@ th{text-transform:none;font-size:12px;letter-spacing:0}
 .dod{border-radius:8px}.dod.on{background:var(--amber);border-color:var(--amber);color:var(--amber-t)}
 .val{background:var(--amber);color:var(--amber-t)}
 .panel-ukryty{display:none!important}
+.labwrap{padding:10px 14px 14px;border-top:1px solid var(--lin)}.mecz.zw .labwrap{display:none}
+.labbtn{width:100%;padding:10px;border-radius:10px;border:1px dashed var(--lin);background:var(--bg);color:var(--txt);font:600 17px var(--cond);cursor:pointer}
+.lab{margin-top:12px}.lab .seg{display:flex;gap:6px;overflow-x:auto;margin-bottom:8px;scrollbar-width:none}
+.lab .seg button{flex:0 0 auto;font:600 15px var(--cond);padding:5px 12px;border-radius:999px;border:1px solid var(--lin);background:var(--bg);color:var(--txt);cursor:pointer}
+.lab .seg button.on{background:var(--amber);color:var(--amber-t);border-color:var(--amber)}
+.lab .linia{display:flex;align-items:center;justify-content:center;gap:14px;margin:12px 0 4px}
+.lab .linia button{width:44px;height:44px;border-radius:12px;border:1px solid var(--lin);background:var(--bg);color:var(--txt);font-size:24px;cursor:pointer}
+.lab .linia span{font:700 34px var(--cond);min-width:100px;text-align:center}
+.lab .wyn{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+.lab .wyn div{background:var(--bg);border-radius:12px;padding:10px;text-align:center;font-size:14px}
+.lab .wyn b{display:block;font:700 30px var(--cond)}.lab .wyn .pow b{color:var(--win)}.lab .wyn small{color:var(--mut);font-size:12px}
+.kursl{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px;color:var(--mut);margin:4px 0 12px}
+.kursl input{width:80px;padding:6px 8px;border-radius:8px;border:1px solid var(--lin);background:var(--bg);color:var(--txt);font:600 16px var(--cond)}
+.valb{background:var(--amber);color:var(--amber-t);font-weight:700;padding:2px 8px;border-radius:6px}
+.hist .r{display:grid;grid-template-columns:96px 1fr 44px;align-items:center;gap:8px;margin:8px 0;font-size:13px}
+.hist .n{color:var(--mut);line-height:1.2}.hist .n small{font-size:11px}
+.kropki{display:flex;gap:4px;align-items:flex-end;height:40px;position:relative}
+.kropki i{flex:1;max-width:28px;border-radius:3px 3px 0 0;background:#3a4f6d;cursor:pointer}.kropki i.t{background:var(--win)}
+.kropki i.wyb{outline:2px solid var(--amber);outline-offset:1px}
+.kropki .lin{position:absolute;left:0;right:0;border-top:2px dashed var(--amber);pointer-events:none}
+.hist .r b{font:700 16px var(--cond);text-align:right}
+.barinfo{min-height:38px;background:var(--bg);border-radius:8px;padding:8px 10px;font-size:13px;color:var(--mut)}.barinfo b{color:var(--txt)}
 #stan .k{background:var(--card);border:1px solid var(--lin);border-radius:14px;padding:14px 16px}
 #stan .m{color:var(--mut);font-size:13px}#stan ul{padding-left:18px}
 .stan-g{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
@@ -2062,7 +2096,8 @@ html+=`<div class="mecz${zw?" zw":""}" data-mk="${mk}"><div class="top"><span cl
 <div class="info"><span>H2H: ${m.h2h.length?m.h2h.join(" &middot; "):"brak meczów"}</span></div></div>
 <div class="wrap"><table><tr><th></th><th>Typ</th><th>Prawd.</th><th>Uczciwy kurs</th><th>Kurs rynku</th><th>Forma ${m.h}</th><th>Forma ${m.g}</th><th>H2H</th></tr>
 ${t.map(x=>`<tr>${wiersz(x)}</tr>`).join("")}
-</table></div></div>`}
+</table></div>${m.lab?`<div class="labwrap"><button class="labbtn" data-labopen="${mk}">&#x1F527; Sprawdź własną linię</button>
+<div class="lab${LABOTW.has(mk)?"":" panel-ukryty"}" data-lab="${mk}">${LABOTW.has(mk)?labHTML(m):""}</div></div>`:""}</div>`}
 lista.innerHTML=(html?`<div class="zwbar"><button class="kbt sz" id="zwAll">&#9656; Zwiń wszystkie</button><button class="kbt sz" id="rozAll">&#9662; Rozwiń wszystkie</button></div>`:"")+(html||'<p>Brak typów przy tych filtrach.</p>')}
 const STAN=__STAN__;
 // zakładki
@@ -2089,6 +2124,60 @@ stan.innerHTML=`<div class="k"><h3 style="margin:0 0 10px;font-family:var(--cond
 <div><b>${STAN.kal?"włączona":"wyłączona"}</b>kalibracja procentów<br><span class="m">${STAN.kal?"procenty poprawione według tego, jak typy naprawdę wchodziły w backteście":"poprawka nie pomagała, więc procenty są prosto z modelu"}</span></div>
 </div>
 </div>`})();
+// ===== Sprawdź własną linię =====
+const KAL=__KAL__;
+const kalibruj=(p,rk)=>{const pk=KAL[rk]||KAL.wszystkie;if(!pk||!pk.length)return p;
+const c=v=>Math.min(.99,Math.max(.01,v));if(p<=pk[0][0])return c(p+pk[0][1]-pk[0][0]);if(p>=pk[pk.length-1][0])return c(p+pk[pk.length-1][1]-pk[pk.length-1][0]);
+for(let i=0;i<pk.length-1;i++){const [x1,y1]=pk[i],[x2,y2]=pk[i+1];if(p>=x1&&p<=x2)return c(y1+(y2-y1)*(p-x1)/((x2-x1)||1))}return p};
+const pois=(k,l)=>{let r=Math.exp(-l);for(let i=1;i<=k;i++)r*=l/i;return r};
+const powyzej=(lin,l)=>{let s=0;for(let k=0;k<=Math.floor(lin);k++)s+=pois(k,l);return 1-s};
+const RYN={gole:["Gole",3,"bramki"],rozne:["Rożne",5,"rozne"],kartki:["Kartki",7,"kartki"],strzaly:["Strzały",9,"strzaly"],celne:["Celne",11,"strzaly"]};
+const LABOTW=new Set(),LABST={};
+const mByKey=k=>D.find(m=>m.h+"|"+m.g+"|"+m.data===k);
+function labStan(m){const k=m.h+"|"+m.g+"|"+m.data;if(!LABST[k]){const rk=m.lab.lam.rozne?"rozne":"gole";
+const l=(m.lab.lam[rk][0]+m.lab.lam[rk][1]);LABST[k]={rk,cel:"mecz",lin:Math.floor(l)+.5,kurs:"",kursq:"",bar:null}}return LABST[k]}
+function barInfo(m,S){if(!S.bar)return"Dotknij słupka, żeby zobaczyć mecz.";const [idx,j]=S.bar,rows=[m.lab.hh,m.lab.ha,m.lab.h2h][idx];
+const swoja=idx===1?(S.cel==="a"||S.cel==="mecz"):(S.cel!=="a");const v=rows.map(r=>[r,wartosc(r,S.rk,S.cel,swoja)]).filter(z=>z[1]!=null)[j];
+if(!v)return"Dotknij słupka, żeby zobaczyć mecz.";const r=v[0],i=RYN[S.rk][1],druz=idx===1?m.g:m.h,gole=r[2]?`${r[3]}:${r[4]}`:`${r[4]}:${r[3]}`;
+return`<b>${r[0]}</b> &middot; ${r[2]?`${druz} &ndash; ${r[1]}`:`${r[1]} &ndash; ${druz}`} <b>${gole}</b><br>
+${RYN[S.rk][0]}: ${druz} ${r[i]}, ${r[1]} ${r[i+1]} &rarr; liczone: <b>${v[1]}</b> (${v[1]>S.lin?"powyżej":"poniżej"} ${S.lin.toFixed(1)})`}
+function wartosc(r,rk,cel,swoja){const i=RYN[rk][1],own=r[i],opp=r[i+1];if(own==null||opp==null)return null;
+if(cel==="mecz")return own+opp;return swoja?own:opp}
+function labHTML(m){const S=labStan(m),L=m.lab.lam,lamv=S.cel==="mecz"?L[S.rk][0]+L[S.rk][1]:L[S.rk][S.cel==="h"?0:1];
+let p=powyzej(S.lin,lamv);const kat=RYN[S.rk][2];p=kalibruj(p,kat);const q=1-p,k=parseFloat(String(S.kurs).replace(",",".")),kq=parseFloat(String(S.kursq).replace(",","."));
+const ev=k>1?p*k-1:null,evq=kq>1?q*kq-1:null;
+const vb=e=>e==null?"":`<span class="${e>0?"valb":"m"}">${e>0?`VALUE +${(e*100).toFixed(0)}%`:`bez value (${(e*100).toFixed(0)}%)`}</span>`;
+const kto={mecz:"Cały mecz",h:m.h,a:m.g};
+const wiersze=[[m.h,"ost. "+m.lab.hh.length,m.lab.hh,S.cel!=="a"],[m.g,"ost. "+m.lab.ha.length,m.lab.ha,S.cel==="a"||S.cel==="mecz"],[ "H2H","5 sezonów",m.lab.h2h,S.cel!=="a"]];
+const opis=S.cel==="mecz"?"suma obu drużyn":S.cel==="h"?`${m.h}: jego mecze / ile pozwalają rywale ${m.g}`:`${m.g}: jego mecze / ile pozwalają rywale ${m.h}`;
+const pasek=(nazwa,pod,rows,swoja,idx)=>{const v=rows.map(r=>[r,wartosc(r,S.rk,S.cel,idx===1?(S.cel==="a"||S.cel==="mecz"):(S.cel!=="a"))]).filter(z=>z[1]!=null);
+if(!v.length)return`<div class="r"><span class="n">${nazwa}<br><small>${pod}</small></span><span class="m">brak danych</span><b>-</b></div>`;
+const mx=Math.max(S.lin+2,...v.map(z=>z[1])),tr=v.filter(z=>z[1]>S.lin).length;
+return`<div class="r"><span class="n">${nazwa}<br><small>${pod}</small></span><div class="kropki">${v.map(([r,x],j)=>
+`<i class="${x>S.lin?"t":""}${S.bar&&S.bar[0]===idx&&S.bar[1]===j?" wyb":""}" style="height:${Math.max(6,x/mx*100)}%" data-bar="${idx}|${j}"></i>`).join("")}
+<div class="lin" style="bottom:${S.lin/mx*100}%"></div></div><b>${tr}/${v.length}</b></div>`};
+return`<div class="seg">${Object.entries(RYN).filter(([r])=>L[r]).map(([r,[n]])=>`<button class="${r===S.rk?"on":""}" data-lset="rk" data-v="${r}">${n}</button>`).join("")}</div>
+<div class="seg male">${Object.entries(kto).map(([c,n])=>`<button class="${c===S.cel?"on":""}" data-lset="cel" data-v="${c}">${n}</button>`).join("")}</div>
+<div class="linia"><button data-lset="minus" aria-label="Zmniejsz linię">&minus;</button><span>${S.lin.toFixed(1)}</span><button data-lset="plus" aria-label="Zwiększ linię">+</button></div>
+<p class="m" style="text-align:center;margin:0">oczekiwane: ${lamv.toFixed(1)} &middot; ${opis}</p>
+<div class="wyn"><div class="${p>=.5?"pow":""}"><b>${(p*100).toFixed(0)}%</b>powyżej ${S.lin.toFixed(1)}<br><small>uczciwy kurs ${(1/p).toFixed(2)}</small></div>
+<div class="${q>.5?"pow":""}"><b>${(q*100).toFixed(0)}%</b>poniżej ${S.lin.toFixed(1)}<br><small>uczciwy kurs ${(1/q).toFixed(2)}</small></div></div>
+<div class="kursl">Kurs u bukmachera: powyżej <input inputmode="decimal" data-lset="kurs" data-pole="kurs" value="${S.kurs}" placeholder="1.85"> ${vb(ev)}</div>
+<div class="kursl" style="margin-top:-6px">poniżej <input inputmode="decimal" data-lset="kurs" data-pole="kursq" value="${S.kursq}" placeholder="1.95"> ${vb(evq)}</div>
+<div class="hist">${pasek(m.h,"ost. "+m.lab.hh.length,m.lab.hh,true,0)}${pasek(m.g,"ost. "+m.lab.ha.length,m.lab.ha,true,1)}${pasek("H2H","5 sezonów",m.lab.h2h,true,2)}</div>
+<div class="barinfo m">${barInfo(m,S)}</div>`}
+lista.addEventListener("click",e=>{
+const o=e.target.closest("[data-labopen]");if(o){const k=o.dataset.labopen,box=o.parentElement.querySelector(".lab");
+if(LABOTW.has(k)){LABOTW.delete(k);box.classList.add("panel-ukryty")}else{LABOTW.add(k);box.innerHTML=labHTML(mByKey(k));box.classList.remove("panel-ukryty")}return}
+const b=e.target.closest("[data-lset]");if(b&&b.dataset.lset!=="kurs"){const box=b.closest("[data-lab]"),m=mByKey(box.dataset.lab),S=labStan(m);
+S.bar=null;if(b.dataset.lset==="rk"){S.rk=b.dataset.v;const L=m.lab.lam[S.rk];S.lin=Math.floor(S.cel==="mecz"?L[0]+L[1]:L[S.cel==="h"?0:1])+.5}
+else if(b.dataset.lset==="cel"){S.cel=b.dataset.v;const L=m.lab.lam[S.rk];S.lin=Math.floor(S.cel==="mecz"?L[0]+L[1]:L[S.cel==="h"?0:1])+.5}
+else if(b.dataset.lset==="minus")S.lin=Math.max(.5,S.lin-1);else if(b.dataset.lset==="plus")S.lin+=1;
+box.innerHTML=labHTML(m);return}
+const bar=e.target.closest("[data-bar]");if(bar){const box=bar.closest("[data-lab]"),m=mByKey(box.dataset.lab),S=labStan(m);
+S.bar=bar.dataset.bar.split("|").map(Number);box.innerHTML=labHTML(m)}});
+lista.addEventListener("input",e=>{const i=e.target.closest('[data-lset="kurs"]');if(!i)return;const box=i.closest("[data-lab]"),m=mByKey(box.dataset.lab);
+const pole=i.dataset.pole||"kurs";labStan(m)[pole]=i.value;const pos=i.selectionStart;box.innerHTML=labHTML(m);const n=box.querySelector(`[data-pole="${pole}"]`);n.focus();try{n.setSelectionRange(pos,pos)}catch(x){}});
 let ZWIN_DOM=innerWidth<=640;const PRZEL=new Set();
 lista.addEventListener("click",e=>{
 if(e.target.closest("#zwAll")){ZWIN_DOM=true;PRZEL.clear();rys();return}
@@ -2130,6 +2219,7 @@ def zapisz_html(sciezka, mecze, n_forma, otworz=True, odswiez_url="", vapid_pub=
               .replace("__N__", str(n_forma)).replace("__PWA__", PWA_HEAD)
               .replace("__VAPID__", json.dumps(vapid_pub))
               .replace("__STAN__", json.dumps(STAN_DANYCH, ensure_ascii=False))
+              .replace("__KAL__", json.dumps(KALIBRACJA))
               .replace("__BT__", '<a class="tab" href="backtest.html">Backtest</a>'
                        if os.path.exists(os.path.join(os.path.dirname(sciezka) or ".", "backtest.html")) else "")
               )
@@ -2571,7 +2661,14 @@ def uruchom(a, otworz=True):
         _p = {n: kalibruj(p, "wynik") for n, p, _, _ in t if n in ("1 (gospodarz)", "X (remis)", "2 (gość)")}
         _s = sum(_p.values()) or 1
         p1x2 = [round(_p.get(n, 0) / _s * 100) for n in ("1 (gospodarz)", "X (remis)", "2 (gość)")]
+        lab = {"lam": {"gole": [round(pr["lam_h"], 3), round(pr["lam_a"], 3)]},
+               "hh": [wiersz_lab(x, h) for x in forma_h], "ha": [wiersz_lab(x, g) for x in forma_g],
+               "h2h": [wiersz_lab(x, h) for x in pr.get("h2h", [])[:10]]}
+        for co in ("rozne", "kartki", "strzaly", "celne"):
+            if pr.get(co + "_h") is not None and pr.get(co + "_a") is not None:
+                lab["lam"][co] = [round(pr[co + "_h"], 3), round(pr[co + "_a"], 3)]
         mecz_html = {"liga": NAZWY.get(kod, kod), "data": w.get("Date", ""), "godz": w.get("Time", ""), "p1x2": p1x2,
+                     "lab": lab,
                      "h": h_pokaz, "g": g_pokaz, "lh": round(pr["lam_h"], 2), "la": round(pr["lam_a"], 2),
                      "kartki": round(pr["kartki"], 1) if pr.get("kartki") else None,
                      "rozne": round(pr["rozne"], 1) if pr.get("rozne") else None,
