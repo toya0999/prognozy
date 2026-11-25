@@ -767,7 +767,7 @@ class ApiFootball:
         self.okno = [str(d + timedelta(days=przes[0])), str(d + timedelta(days=przes[1]))]
 
     def get(self, sciezka, ttl_h=None, zapisz=True):
-        dane = self.cache.get("af|" + sciezka, ttl_h)
+        dane = self.cache.get("af|" + sciezka, ttl_h) if zapisz else None   # zapisz=False: zawsze świeże dane
         if dane is not None:
             return dane
         if self.wyczerpane:
@@ -1220,17 +1220,20 @@ def espn_mecze(cache, kod, dzien):
     if not liga:
         return []
     d = datetime.strptime(dzien, "%d/%m/%Y")
-    zakres = f"{(d - timedelta(days=1)):%Y%m%d}-{(d + timedelta(days=1)):%Y%m%d}"
-    k = f"espn|{liga}|{zakres}"
+    k = f"espn|{liga}|{d:%Y%m%d}"
     dane = cache.get(k, 1)
     if dane is None:
-        try:
-            j, _ = pobierz_json(f"{ESPN}/{liga}/scoreboard?dates={zakres}&limit=300")
-        except Exception as e:
-            print(f"  ESPN {liga}: nie pobrano ({e})")
+        zdarzenia = []
+        for dd in (d, d - timedelta(days=1)):          # ESPN liczy dni w UTC - sprawdzamy też dzień wcześniej
+            try:
+                j, _ = pobierz_json(f"{ESPN}/{liga}/scoreboard?dates={dd:%Y%m%d}")
+                zdarzenia += j.get("events", [])
+            except Exception as e:
+                print(f"  ESPN {liga} {dd:%d.%m}: nie pobrano ({e})")
+        if not zdarzenia:
             return cache.get(k) or []
         dane = []
-        for ev in j.get("events", []):
+        for ev in zdarzenia:
             for c in ev.get("competitions", [])[:1]:
                 st = ((c.get("status") or ev.get("status") or {}).get("type") or {})
                 druz = {x.get("homeAway"): x for x in c.get("competitors", [])}
