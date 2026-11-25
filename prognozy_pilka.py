@@ -826,9 +826,14 @@ def lista_dnia(af, dzien, ttl_h):
              "goals": f.get("goals")} for f in pelne]
     af.cache.set(k, dane)
     nazwy = af.cache.get("af|nazwy") or {}
+    import re as _re
+    mlodziez = _re.compile(r"\b(u1[5-9]|u2[0-3]|ii|b|w|women|reserves?|youth)\b", _re.I)
     for f in dane:
         for s in ("home", "away"):
-            nazwy[normalizuj(f["teams"][s]["name"])] = [f["teams"][s]["id"], f["teams"][s]["name"]]
+            nz = f["teams"][s]["name"]
+            if mlodziez.search(nz):          # juniorzy, rezerwy, kobiety - pomijamy
+                continue
+            nazwy[normalizuj(nz)] = [f["teams"][s]["id"], nz]
     af.cache.set("af|nazwy", nazwy)
     return dane
 
@@ -847,7 +852,9 @@ def _ma_dane(af, fid):
 
 
 def id_druzyny(af, nazwa):
-    nazwy = af.cache.get("af|nazwy") or {}
+    import re as _re
+    nazwy = {k: v for k, v in (af.cache.get("af|nazwy") or {}).items()
+             if not _re.search(r"\b(u1[5-9]|u2[0-3]|ii|b|w|women|reserves?|youth)\b", v[1], _re.I)}
     k = znajdz(nazwa, nazwy)
     return tuple(nazwy[k]) if k else None
 
@@ -2598,7 +2605,7 @@ def uruchom(a, otworz=True):
             p = kalibruj(p, rk)
             proc = p * 100
             kurs_rynku, buk = kursy.get(klucz, (None, None)) if klucz else (None, None)
-            jest_value = bool(kurs_rynku and p * kurs_rynku > a.value_prog)
+            jest_value = bool(kurs_rynku and p * kurs_rynku > a.value_prog and not pr.get("z_kursow"))
             if not (a.min_proc <= proc <= a.max_proc) and not jest_value:
                 continue
             value = ""
