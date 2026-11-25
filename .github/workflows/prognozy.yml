@@ -2,7 +2,11 @@ name: Prognozy
 
 on:
   schedule:
-    - cron: "17 */3 * * *"   # co 3 godziny
+    # Godziny polskie: tydzień 8, 18, 23; weekend 10, 13, 16, 18, 20, 23.
+    # GitHub liczy w UTC, a Polska ma czas zimowy/letni, więc startujemy w obu wariantach,
+    # a krok "czas" przepuszcza tylko właściwą godzinę.
+    - cron: "5 6,7,16,17,21,22 * * 1-5"
+    - cron: "5 8,9,11,12,14,15,16,17,18,19,21,22 * * 0,6"
   workflow_dispatch:          # przycisk "Run workflow" = ręczne odświeżenie
 
 permissions:
@@ -15,7 +19,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  czas:
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.c.outputs.ok }}
+    steps:
+      - id: c
+        env:
+          TZ: Europe/Warsaw
+          ZDARZENIE: ${{ github.event_name }}
+        run: |
+          H=$(date +%-H); D=$(date +%u)
+          if [ "$D" -ge 6 ]; then GODZ="10 13 16 18 20 23"; else GODZ="8 18 23"; fi
+          OK=false
+          [ "$ZDARZENIE" != "schedule" ] && OK=true
+          for g in $GODZ; do [ "$H" = "$g" ] && OK=true; done
+          echo "Godzina w Polsce: $H (dzień $D), plan: $GODZ -> uruchamiam: $OK"
+          echo "ok=$OK" >> "$GITHUB_OUTPUT"
   build:
+    needs: czas
+    if: needs.czas.outputs.ok == 'true'
     runs-on: ubuntu-latest
     env:
       TZ: Europe/Warsaw
