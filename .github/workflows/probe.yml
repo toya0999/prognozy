@@ -1,0 +1,26 @@
+name: probe
+on: {push: {branches: [probe-espn]}}
+jobs:
+  p:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          python3 - <<'PY'
+          import json,urllib.request
+          def g(u): return json.load(urllib.request.urlopen(urllib.request.Request(u,headers={"User-Agent":"Mozilla/5.0"}),timeout=20))
+          E="https://site.api.espn.com/apis/site/v2/sports/soccer"
+          for lg,d in (("eng.1","20261122"),("uefa.champions","20261125"),("pol.1","20261123")):
+              sb=g(f"{E}/{lg}/scoreboard?dates={d}")
+              evs=[e for e in sb["events"] if e["status"]["type"].get("completed")]
+              print(lg,len(sb["events"]),"done",len(evs))
+              if not evs: continue
+              j=g(f"{E}/{lg}/summary?event={evs[0]['id']}")
+              print(evs[0]["name"],list(j.keys()))
+              for t in j.get("rosters",[])[:1]:
+                  print(t["team"]["displayName"],t.get("homeAway"),len(t.get("roster",[])))
+                  for p in t.get("roster",[])[:4]:
+                      print(" ",p["athlete"]["displayName"],p.get("starter"),p.get("subbedIn"),p.get("subbedOut"),{k:p.get(k) for k in ("position","jersey") if k in p and not isinstance(p.get(k),dict)})
+                      print("   ",[(s.get("name"),s.get("value")) for s in p.get("stats",[])])
+                  sub=[p for p in t.get("roster",[]) if p.get("subbedIn")]
+                  if sub: print(" SUB",json.dumps({k:v for k,v in sub[0].items() if k!="athlete"})[:600])
+          PY
