@@ -9,21 +9,14 @@ jobs:
           import json,urllib.request
           def g(u): return json.load(urllib.request.urlopen(urllib.request.Request(u,headers={"User-Agent":"Mozilla/5.0"}),timeout=20))
           E="https://site.api.espn.com/apis/site/v2/sports/soccer"
-          for lg,d in (("eng.1","20261128"),("uefa.champions","20261125"),("pol.1","20261128"),("arg.1","20261128")):
+          for lg in ["eng.1","eng.2","esp.1","ita.1","ger.1","fra.1","ned.1","por.1","bel.1","tur.1","sco.1","gre.1","pol.1","pol.ekstraklasa","arg.1","bra.1","aut.1","den.1","sui.1","nor.1","swe.1","rou.1","uefa.champions","uefa.europa","uefa.europa.conf"]:
               try:
-                  sb=g(f"{E}/{lg}/scoreboard?dates={d}")
+                  sb=g(f"{E}/{lg}/scoreboard?dates=20261122"); print(lg,"OK",len(sb.get("events",[])),sb.get("leagues",[{}])[0].get("name"))
               except Exception as e:
-                  print(lg,"ERR",e); continue
-              ev=sb["events"][0]; c=ev["competitions"][0]["competitors"]
-              print(lg,ev["name"],[(x["team"]["id"],x["team"]["displayName"],x["homeAway"]) for x in c])
-              tid=c[0]["team"]["id"]
-              try:
-                  s=g(f"{E}/{lg}/teams/{tid}/schedule")
-                  evs=s.get("events",[])
-                  done=[(e["date"][:10],e["id"],e["name"],e["competitions"][0]["status"]["type"].get("completed")) for e in evs]
-                  print("  sched",len(evs),done[-4:])
-                  le=[e for e in evs if e["competitions"][0]["status"]["type"].get("completed")]
-                  if le: print("  leagueSlug in event?", le[-1].get("league"), list(le[-1].keys()))
-              except Exception as e:
-                  print("  sched ERR",e)
+                  print(lg,"ERR",e)
+          import re
+          for lg in ["pol.1"]:
+              for u in (f"{E}/{lg}/scoreboard", f"{E}/{lg}/teams"):
+                  try: j=g(u); print(u,"OK",str(j)[:200])
+                  except Exception as e: print(u,"ERR",e)
           PY
