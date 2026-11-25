@@ -204,6 +204,9 @@ ALIASY = {
     "gladbach": "m gladbach", "borussia monchengladbach": "m gladbach", "mainz 05": "mainz",
     "red bull salzburg": "salzburg", "rb salzburg": "salzburg", "rapid wien": "rapid vienna",
     "kobenhavn": "copenhagen", "fc copenhagen": "copenhagen", "bodo glimt": "bodo glimt",
+    "wolverhampton wanderers": "wolves", "queens park rangers": "qpr", "sheffield wednesday": "sheffield weds",
+    "west bromwich albion": "west brom", "brighton and hove albion": "brighton", "brighton hove albion": "brighton",
+    "espanyol": "espanol", "athletic club": "ath bilbao", "deportivo alaves": "alaves",
     "legia warsaw": "legia", "legia warszawa": "legia", "lech poznan": "lech", "rakow czestochowa": "rakow",
     "jagiellonia bialystok": "jagiellonia", "pogon szczecin": "pogon", "gornik zabrze": "gornik",
     "az": "az alkmaar", "istanbul basaksehir": "buyuksehyr", "basaksehir": "buyuksehyr",
@@ -1284,10 +1287,15 @@ def espn_statystyki(cache, kod, ev_id):
 
 
 def wynik_espn(cache, e):
-    for m in espn_mecze(cache, e["kod"], e["data"]):
-        if not m["koniec"] or m["hg"] in (None, "") or m["ag"] in (None, ""):
-            continue
-        if znajdz(e["hp"], {normalizuj(m["h"]): 1}) and znajdz(e["gp"], {normalizuj(m["g"]): 1}):
+    gotowe = [m for m in espn_mecze(cache, e["kod"], e["data"])
+              if m["koniec"] and m["hg"] not in (None, "") and m["ag"] not in (None, "")]
+    pasuje = lambda a, b: bool(znajdz(a, {normalizuj(b): 1}))
+    pelne = [m for m in gotowe if pasuje(e["hp"], m["h"]) and pasuje(e["gp"], m["g"])]
+    if not pelne:      # nazwa jednej drużyny inna - wystarczy druga, jeśli tego dnia grała tylko raz
+        pelne = [m for m in gotowe if pasuje(e["hp"], m["h"]) or pasuje(e["gp"], m["g"])]
+        pelne = pelne if len(pelne) == 1 else []
+    for m in pelne[:1]:
+        if True:
             w = {"FTHG": m["hg"], "FTAG": m["ag"]}
             st = espn_statystyki(cache, e["kod"], m["id"])
             for kl, col in (("C", "C"), ("Y", "Y"), ("R", "R"), ("S", "S"), ("ST", "ST")):
