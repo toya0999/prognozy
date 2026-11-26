@@ -1766,6 +1766,7 @@ Mecze czekające na wynik: __CZEKA__.</p>
 <div class="chipy" id="rynki"></div>
 <label class="m">Liga <select id="liga" style="padding:4px 8px;border-radius:6px"><option value="">wszystkie</option></select></label>
 &nbsp; <label class="m"><input type="checkbox" id="pod"> uwzględnij podatek 12%</label>
+<p class="m" id="opisKat"></p>
 <div class="k" id="tab"></div>
 <div class="k" id="strat"></div>
 <div class="k" id="bilans"></div>
@@ -1782,14 +1783,18 @@ let DZ="",RY="";
 const ts=d=>{const [a,b,c]=d.split("/").map(Number);return new Date(c,b-1,a).getTime()};
 const daty=[...new Set(D.map(x=>x.d))].sort((a,b)=>ts(b)-ts(a));
 dni.innerHTML='<button class="chip on" data-d="">Wszystkie dni</button>'+daty.map(d=>`<button class="chip" data-d="${d}">${d.slice(0,5).replace("/",".")} (${D.filter(x=>x.d===d).length})</button>`).join("");
-const RN={"":"Wszystkie rynki",wynik:"Wynik",bramki:"Bramki",rozne:"Rożne",kartki:"Kartki",strzaly:"Strzały",zaw:"Zawodnicy"};
+const RN={"":"Wszystkie rynki",wynik:"Wynik",bramki:"Bramki",rozne:"Rożne",kartki:"Kartki",strzaly:"Strzały",zaw:"Zawodnicy",value:"&#x1F4B0; Value bety"};
 rynki.innerHTML=Object.entries(RN).map(([k,v])=>`<button class="chip${k?"":" on"}" data-r="${k}">${v}</button>`).join("");
 dni.onclick=e=>{const c=e.target.closest("[data-d]");if(!c)return;DZ=c.dataset.d;dni.querySelectorAll(".chip").forEach(b=>b.classList.toggle("on",b===c));rys()};
 rynki.onclick=e=>{const c=e.target.closest("[data-r]");if(!c)return;RY=c.dataset.r;rynki.querySelectorAll(".chip").forEach(b=>b.classList.toggle("on",b===c));rys()};
 pod.onchange=rys;liga.onchange=rys;
 liga.innerHTML+=[...new Set(D.map(x=>x.l))].sort().map(l=>`<option value="${l}">${l}</option>`).join("");
 const zl=v=>`<span class="${v>=0?"plus":"minus"}">${v>=0?"+":""}${v.toFixed(0)} zł</span>`;
-function rys(){const P=pod.checked?0.88:1;const xs=D.filter(x=>(!DZ||x.d===DZ)&&(!RY||x.r===RY)&&(!liga.value||x.l===liga.value));
+// value bety to osobna kategoria (niższe szanse, prawdziwe kursy) - nie mieszamy ich ze zwykłymi typami
+function rys(){const P=pod.checked?0.88:1;const baza=D.filter(x=>(!DZ||x.d===DZ)&&(!liga.value||x.l===liga.value));
+const xs=baza.filter(x=>RY==="value"?x.v0:(!x.v0&&(!RY||x.r===RY)));
+opisKat.innerHTML=RY==="value"?"Pokazuję tylko value bety: typy, w których model widział przewagę nad kursem bukmachera. Liczone po prawdziwych kursach.":
+`Value bety są liczone osobno (${baza.filter(x=>x.v0).length} rozliczonych) &mdash; zobacz kategorię „Value bety”.`;
 const prz=[[0,50],[50,60],[60,70],[70,80],[80,90],[90,101]];let wiersze="",S={n:0,t:0,kn:0,kz:0,sz:0,sp:0};
 for(const [a,b] of prz){const g=xs.filter(x=>x.p*100>=a&&x.p*100<b);if(!g.length)continue;
 const t=g.filter(x=>x.ok).length,sp=g.reduce((s,x)=>s+x.p,0)/g.length*100;
@@ -1798,7 +1803,7 @@ const sz=g.reduce((s,x)=>s+(x.ok?100*P*(1/x.p)*0.93:0)-100,0);
 S.n+=g.length;S.t+=t;S.kn+=zk.length;S.kz+=kz;S.sz+=sz;S.sp+=sp*g.length;
 wiersze+=`<tr><td><b>${a===0?"poniżej 50":a+"–"+Math.min(b,100)}%</b></td><td>${g.length}</td><td>${t}</td><td>${sp.toFixed(1)}%</td>
 <td><b>${(t/g.length*100).toFixed(1)}%</b></td><td>${zk.length?zk.length+" &middot; "+zl(kz):"-"}</td><td>${zl(sz)}</td></tr>`}
-const cl=xs.filter(x=>x.k0&&x.k),clv=a=>a.length?a.reduce((s,x)=>s+(x.k0/x.k-1),0)/a.length*100:0,
+const cl=baza.filter(x=>x.k0&&x.k),clv=a=>a.length?a.reduce((s,x)=>s+(x.k0/x.k-1),0)/a.length*100:0,
 plus=a=>a.length?a.filter(x=>x.k0>x.k+0.001).length/a.length*100:0,vb=cl.filter(x=>x.v0);
 clv.innerHTML=cl.length?`<h3 style="margin:0 0 6px;font-size:16px">Ruch kursów (CLV)</h3>
 <p class="m">Porównanie kursu z chwili, gdy typ pierwszy raz pojawił się na stronie, z ostatnim kursem przed meczem. Jeśli kurs potem
@@ -1822,10 +1827,10 @@ const nag=`<tr><th></th><th>Typów</th><th>Weszło</th><th>Model mówił</th><th
 const grupuj=f=>{const G={};xs.forEach(x=>{(G[f(x)]=G[f(x)]||[]).push(x)});return Object.entries(G).map(([k,g])=>[k,podsum(g)]).sort((a,b)=>b[1].n-a[1].n)};
 if(xs.length){
 const ids={};xs.forEach(x=>{if(!ids[x.id]||x.p>ids[x.id].p)ids[x.id]=x});
-const S1=Object.values(ids),S2=xs.filter(x=>x.v0&&x.k),S3=xs.filter(x=>x.p>=0.7&&x.p<0.85),S4=xs.filter(x=>x.p>=0.85);
+const S1=Object.values(ids),S2=baza.filter(x=>x.v0&&x.k),S3=xs.filter(x=>x.p>=0.7&&x.p<0.85),S4=xs.filter(x=>x.p>=0.85);
 strat.innerHTML=`<h3 style="margin:0 0 6px;font-size:16px">Strategie (100 zł na każde zdarzenie)</h3><div style="overflow-x:auto"><table>${nag}
 ${wiersz("Najpewniejszy typ każdego meczu",podsum(S1))}${wiersz("Value bety (kurs bukmachera)",podsum(S2))}
-${wiersz("Wszystkie typy 70–85%",podsum(S3))}${wiersz("Wszystkie typy 85% i więcej",podsum(S4))}${wiersz("Wszystkie typy",podsum(xs))}</table></div>
+${wiersz("Wszystkie typy 70–85%",podsum(S3))}${wiersz("Wszystkie typy 85% i więcej",podsum(S4))}${wiersz(RY==="value"?"Wszystkie value bety":"Wszystkie typy (bez value betów)",podsum(xs))}</table></div>
 <p class="m">Szacunek: typy bez kursu bukmachera liczone po kursie uczciwym minus 7% marży. Value bety: prawdziwe kursy.</p>`;
 const dni=[...new Set(xs.map(x=>x.d))].sort((a,b)=>ts(a)-ts(b));let cs=0,ck=0;const ps=[],pk=[],rows=[];
 dni.forEach(d=>{const q=podsum(xs.filter(x=>x.d===d));cs+=q.sz;ck+=q.kz;ps.push(cs);pk.push(ck);
