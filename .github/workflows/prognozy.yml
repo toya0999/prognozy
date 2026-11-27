@@ -56,7 +56,17 @@ jobs:
             historia.json
           key: cache-api-${{ github.run_id }}
           restore-keys: cache-api-
+      # Gdy w repozytorium jest plik PAUZA: zamiast prognoz publikujemy komunikat, a kopię bazy rozliczeń zostawiamy.
+      - name: Strona wstrzymana
+        if: hashFiles('PAUZA') != ''
+        run: |
+          mkdir -p strona
+          if [ -s historia.json ]; then cp historia.json strona/; else curl -sf -o strona/historia.json "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/historia.json" || true; fi
+          cp PAUZA.html strona/index.html
+          cp PAUZA.html strona/rozliczenie.html
+          ls -la strona
       - name: Generuj strone
+        if: hashFiles('PAUZA') == ''
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}

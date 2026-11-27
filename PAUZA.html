@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prognozy – wstrzymane</title>
+<style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0E1A2B;color:#E9EEF5;font:16px/1.5 system-ui,sans-serif;padding:24px;box-sizing:border-box}
+main{max-width:420px;background:#15243A;border:1px solid #23364F;border-radius:16px;padding:28px 24px;text-align:center}
+h1{margin:0 0 8px;font-size:24px;color:#F2B33D}
+p{margin:0;color:#8FA3BC}
+</style>
+</head>
+<body>
+<main>
+<h1>Prognozy wstrzymane</h1>
+<p>Strona chwilowo nie jest aktualizowana. Historia rozliczeń jest zachowana i wróci razem z prognozami.</p>
+</main>
+<script>
+try{navigator.serviceWorker&&navigator.serviceWorker.getRegistrations().then(r=>r.forEach(x=>x.unregister()))}catch(e){}
+try{caches&&caches.keys().then(k=>k.forEach(n=>caches.delete(n)))}catch(e){}
+</script>
+</body>
+</html>
